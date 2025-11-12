@@ -139,7 +139,7 @@ export type RouteDescriptionProps = {
     fullRoutePath?: string;
     requiresAuth?: boolean;
     descriptionText?: string;
-    method: "all" | "get" | "put" | "post" | "delete";
+    method: "ALL" | "GET" | "PUT" | "POST" | "DELETE" ;
     requestParamsTypeString?: string;
     requestBodyTypeString?: string;
     requestHeadersTypeString?: string;
@@ -190,6 +190,10 @@ program
             scope = packageDotJson["apiTypes"]?.scope;
         }
 
+        if (!scope) {
+            scope = "";
+        }
+
         if (!baseUrl && packageDotJson["apiTypes"]?.baseUrl) {
             baseUrl = packageDotJson["apiTypes"]?.baseUrl;
         }
@@ -237,10 +241,13 @@ program
                 eventsDescriptions: EventDescriptionMap;
             };
 
+            const descriptionRoute = join(fullBasePath, `/d__describe-json`);
+            console.log("Description Route:", descriptionRoute)
+
             const globalDescription: ApiGlobalDescription = (
                 await axios({
                     method: "get",
-                    url: join(fullBasePath, `/__describe-json`),
+                    url: descriptionRoute,
                     headers: secret
                         ? {
                               authorization: `Secret ${secret}`,
@@ -257,7 +264,7 @@ program
                 `// @ts-nocheck
 
 import { AxiosRequestConfig, AxiosResponse } from "axios";
-import { Merge } from "../common";
+export type Merge<T, U> = T & Omit<U, keyof T>;
 
 export type AsyncEmitOptions = {
     timeout?: number;
@@ -275,9 +282,7 @@ export type RequestConfig<D> = {
 } & AxiosRequestConfig<D>;
 
 
-type OmitFunctions<T> = T extends any[]? T: Pick<T, {
-  [K in keyof T]: T[K] extends Function ? never : K
-}[keyof T]>;
+type OmitFunctions<T> = T;
 
         `,
             ];
@@ -376,25 +381,6 @@ export type OnEvent = (
 
 export type OnEventNames = ${eventsArray.map(c => `"${c.event}"`).join(" | ")};
 
-export type OnEventBody<U extends string> = ${eventsArray
-                    .map(r => {
-                        return `
-U extends "${r.event}"
-? ${r.eventBodyTypeString}
-:`;
-                    })
-                    .join("")} any;
-
-export type OnEventExpectedResponse<U extends string> = ${eventsArray
-                    .map(r => {
-                        return `
-U extends "${r.event}"
-? ${r.expectedResponseBodyTypeString}
-:`;
-                    })
-                    .join("")} undefined;
-
-
 export type OnEventBodyMap = {${eventsArray
                     .map(r => {
                         return `
@@ -403,7 +389,19 @@ export type OnEventBodyMap = {${eventsArray
                     .join("")}
 };
 
-export type OnEvent = <U extends AsyncEmitEvents | string>(
+export type OnEventExpectedResponseMap = {${eventsArray
+                    .map(r => {
+                        return `
+"${r.event}": ${r.expectedResponseBodyTypeString};`;
+                    })
+                    .join("")}
+};
+
+export type OnEventBody<U extends string> = U extends keyof OnEventBodyMap ? OnEventBodyMap[U] : any;
+
+export type OnEventExpectedResponse<U extends string> = U extends keyof OnEventExpectedResponseMap ? OnEventExpectedResponseMap[U] : undefined;
+
+export type OnEvent = <U extends OnEventNames | string>(
     event: U,
     cb: (
             body: OnEventBody<U>,  
@@ -427,24 +425,13 @@ export type AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmit
     
 export type AsyncEmitEvents = ${channelsArray.map(c => `"${c.fullChannelPath}"`).join(" | ")};
 
-export type AsyncEmitBody<U extends string> = ${channelsArray
+export type AsyncEmitBodyMap = {${channelsArray
                     .map(r => {
                         return `
-    U extends "${r.fullChannelPath}"
-    ? ${r.requestBodyTypeString}
-    :`;
+"${r.fullChannelPath}": ${r.requestBodyTypeString};`;
                     })
-                    .join("")} any;
-
-export type AsyncEmitResponse<U extends string> = ${channelsArray
-                    .map(r => {
-                        return `
-U extends "${r.fullChannelPath}"
-? ${r.responseBodyTypeString}
-:`;
-                    })
-                    .join("")} any;
-
+                    .join("")}
+};
 
 export type AsyncEmitResponseMap = {${channelsArray
                     .map(r => {
@@ -453,6 +440,10 @@ export type AsyncEmitResponseMap = {${channelsArray
                     })
                     .join("")}
 };
+
+export type AsyncEmitBody<U extends string> = U extends keyof AsyncEmitBodyMap ? AsyncEmitBodyMap[U] : any;
+
+export type AsyncEmitResponse<U extends string> = U extends keyof AsyncEmitResponseMap ? AsyncEmitResponseMap[U] : any;
 
 export type AsyncEmit = <U extends AsyncEmitEvents | string>(
     url: U,
@@ -468,7 +459,7 @@ export type AsyncEmit = <U extends AsyncEmitEvents | string>(
             //!!
 
             const postRoutes = routesArray.filter(r => {
-                return r.method == "post" || r.method == "all";
+                return r.method == "POST" || r.method == "ALL";
             });
             if (!postRoutes.length) {
                 content.push(`
@@ -485,33 +476,6 @@ export type ApiPost = <T = any, R = AxiosResponse<T>, D = any>(
 
 export type ApiPostUrl = ${postRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
 
-export type ApiPostBody<U extends string> = ${postRoutes
-                    .map(r => {
-                        return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestBodyTypeString}
-    :`;
-                    })
-                    .join("")} any;
-
-
-export type ApiPostResponse<U extends string> = ${postRoutes
-                    .map(r => {
-                        return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.responseBodyTypeString}
-    :`;
-                    })
-                    .join("")} any;
-
-export type ApiPostResponseMap = {${postRoutes
-                    .map(r => {
-                        return `
-    "${r.fullRoutePath}": ${r.responseBodyTypeString};`;
-                    })
-                    .join("")}
-};
-
 export type ApiPostBodyMap = {${postRoutes
                     .map(r => {
                         return `
@@ -520,30 +484,41 @@ export type ApiPostBodyMap = {${postRoutes
                     .join("")}
 };
 
-export type ApiPostResponseExtractor<Url extends keyof ApiPostResponseMap> = ApiPostResponseMap[Url]
-
-
-
-export type ApiPostHeaders<U extends string> = ${postRoutes
+export type ApiPostResponseMap = {${postRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestHeadersTypeString} & {
-        [key: string]: string; 
-    } :`;
+"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiPostParams<U extends string> = ${postRoutes
+export type ApiPostHeadersMap = {${postRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestParamsTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+    [key: string]: string; 
+};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
+export type ApiPostParamsMap = {${postRoutes
+                    .map(r => {
+                        return `
+"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
+                    })
+                    .join("")}
+};
+
+export type ApiPostBody<U extends string> = U extends keyof ApiPostBodyMap ? ApiPostBodyMap[U] : any;
+
+export type ApiPostResponse<U extends string> = U extends keyof ApiPostResponseMap ? ApiPostResponseMap[U] : any;
+
+export type ApiPostHeaders<U extends string> = U extends keyof ApiPostHeadersMap ? ApiPostHeadersMap[U] : any;
+
+export type ApiPostParams<U extends string> = U extends keyof ApiPostParamsMap ? ApiPostParamsMap[U] : any;
+
+export type ApiPostResponseExtractor<Url extends keyof ApiPostResponseMap> = ApiPostResponseMap[Url];
 
 export type ApiPost = <U extends ApiPostUrl | string>(
     url: U,
@@ -567,7 +542,7 @@ export type ApiPost = <U extends ApiPostUrl | string>(
             //
 
             const putRoutes = routesArray.filter(r => {
-                return r.method == "put" || r.method == "all";
+                return r.method == "PUT" || r.method == "ALL";
             });
             if (!putRoutes.length) {
                 content.push(`
@@ -585,47 +560,47 @@ export type ApiPut = <T = any, R = AxiosResponse<T>, D = any>(
 
 export type ApiPutUrl = ${putRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
 
-export type ApiPutBody<U extends string> = ${putRoutes
+export type ApiPutBodyMap = {${putRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiPutResponse<U extends string> = ${putRoutes
+export type ApiPutResponseMap = {${putRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.responseBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-
-export type ApiPutHeaders<U extends string> = ${putRoutes
+export type ApiPutHeadersMap = {${putRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestHeadersTypeString} & {
-        [key: string]: string; 
-    } :`;
+"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+    [key: string]: string; 
+};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiPutParams<U extends string> = ${putRoutes
+export type ApiPutParamsMap = {${putRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestParamsTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
+export type ApiPutBody<U extends string> = U extends keyof ApiPutBodyMap ? ApiPutBodyMap[U] : any;
+
+export type ApiPutResponse<U extends string> = U extends keyof ApiPutResponseMap ? ApiPutResponseMap[U] : any;
+
+export type ApiPutHeaders<U extends string> = U extends keyof ApiPutHeadersMap ? ApiPutHeadersMap[U] : any;
+
+export type ApiPutParams<U extends string> = U extends keyof ApiPutParamsMap ? ApiPutParamsMap[U] : any;
 
 export type ApiPut = <U extends ApiPutUrl | string>(
     url: U,
@@ -644,7 +619,7 @@ export type ApiPut = <U extends ApiPutUrl | string>(
             //
 
             const getRoutes = routesArray.filter(r => {
-                return r.method == "get" || r.method == "all";
+                return r.method == "GET" || r.method == "ALL";
             });
             if (!getRoutes.length) {
                 content.push(`
@@ -659,47 +634,47 @@ export type ApiGet = <T = any, R = AxiosResponse<T>, D = any>(url: string, confi
 
 export type ApiGetUrl = ${getRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
 
-export type ApiGetBody<U extends string> = ${getRoutes
+export type ApiGetBodyMap = {${getRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiGetResponse<U extends string> = ${getRoutes
+export type ApiGetResponseMap = {${getRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.responseBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-
-export type ApiGetHeaders<U extends string> = ${getRoutes
+export type ApiGetHeadersMap = {${getRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestHeadersTypeString} & {
-        [key: string]: string; 
-    } :`;
+"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+    [key: string]: string; 
+};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiGetParams<U extends string> = ${getRoutes
+export type ApiGetParamsMap = {${getRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestParamsTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
+export type ApiGetBody<U extends string> = U extends keyof ApiGetBodyMap ? ApiGetBodyMap[U] : any;
+
+export type ApiGetResponse<U extends string> = U extends keyof ApiGetResponseMap ? ApiGetResponseMap[U] : any;
+
+export type ApiGetHeaders<U extends string> = U extends keyof ApiGetHeadersMap ? ApiGetHeadersMap[U] : any;
+
+export type ApiGetParams<U extends string> = U extends keyof ApiGetParamsMap ? ApiGetParamsMap[U] : any;
 
 export type ApiGet = <U extends ApiGetUrl | string>(
     url: U,
@@ -717,7 +692,7 @@ export type ApiGet = <U extends ApiGetUrl | string>(
             //
 
             const deleteRoutes = routesArray.filter(r => {
-                return r.method == "delete" || r.method == "all";
+                return r.method == "DELETE" || r.method == "ALL";
             });
             if (!deleteRoutes.length) {
                 content.push(`
@@ -730,47 +705,47 @@ export type ApiDelete = <T = any, R = AxiosResponse<T>, D = any>(url: string, co
          
 export type ApiDeleteUrl = ${deleteRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
 
-export type ApiDeleteBody<U extends string> = ${deleteRoutes
+export type ApiDeleteBodyMap = {${deleteRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiDeleteResponse<U extends string> = ${deleteRoutes
+export type ApiDeleteResponseMap = {${deleteRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.responseBodyTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-
-export type ApiDeleteHeaders<U extends string> = ${deleteRoutes
+export type ApiDeleteHeadersMap = {${deleteRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestHeadersTypeString} & {
-        [key: string]: string; 
-    } :`;
+"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+    [key: string]: string; 
+};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
-
-export type ApiDeleteParams<U extends string> = ${deleteRoutes
+export type ApiDeleteParamsMap = {${deleteRoutes
                     .map(r => {
                         return `
-    U extends "${r.fullRoutePath}"
-    ? ${r.requestParamsTypeString}
-    :`;
+"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
                     })
-                    .join("")} any;
+                    .join("")}
+};
 
+export type ApiDeleteBody<U extends string> = U extends keyof ApiDeleteBodyMap ? ApiDeleteBodyMap[U] : any;
+
+export type ApiDeleteResponse<U extends string> = U extends keyof ApiDeleteResponseMap ? ApiDeleteResponseMap[U] : any;
+
+export type ApiDeleteHeaders<U extends string> = U extends keyof ApiDeleteHeadersMap ? ApiDeleteHeadersMap[U] : any;
+
+export type ApiDeleteParams<U extends string> = U extends keyof ApiDeleteParamsMap ? ApiDeleteParamsMap[U] : any;
 
 export type ApiDelete = <U extends ApiDeleteUrl | string>(
     url: U,
