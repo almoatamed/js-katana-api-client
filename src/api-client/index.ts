@@ -1,5 +1,4 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig } from "axios";
-import pako from "pako";
+import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from "axios";
 import io, { ManagerOptions, Socket, SocketOptions } from "socket.io-client";
 
 export const trimSlashes = (path: string, removeStartingSlash = false, removeEndingSlash = true) => {
@@ -15,7 +14,7 @@ export const trimSlashes = (path: string, removeStartingSlash = false, removeEnd
     const startsWithASlash = path.startsWith("/");
     const endsWithASlash = path.endsWith("/");
 
-    const paths = path.split("/").filter((x) => x);
+    const paths = path.split("/").filter(x => x);
     const processedPaths = [] as string[];
     for (const path of paths) {
         if (path == "..") {
@@ -48,20 +47,21 @@ export const trimSlashes = (path: string, removeStartingSlash = false, removeEnd
 
 const path = {
     join: function pathJoin(...args: string[]) {
-        return args
-            .map((part, i) => {
-                if (i === 0) {
-                    return part.trim().replace(/[/\\]+$/, ""); // Trim trailing slashes for the first part
-                } else {
-                    return part.trim().replace(/(^[/\\]+|[/\\]+$)/g, ""); // Trim both leading and trailing slashes for other parts
-                }
-            })
-            .filter(Boolean) // Remove empty strings
-            .join("/");
+        const parts: string[] = [];
+        for (let i = 0; i < args.length; i++) {
+            const part = args[i]?.trim();
+            if (!part) continue;
+            if (i === 0) {
+                parts.push(part.replace(/[/\\]+$/, ""));
+            } else {
+                parts.push(part.replace(/(^[/\\]+|[/\\]+$)/g, ""));
+            }
+        }
+        return parts.join("/");
     },
 };
 
-export const isNumber = function (num: any) {
+export const isNumber = function (num: any): num is number {
     if (typeof num === "number") {
         return num - num === 0;
     }
@@ -78,22 +78,56 @@ export type AsyncEmitOptions = {
     quiet?: boolean;
     notScoped?: boolean;
 };
+
 export interface ExtendedSocket extends Socket {
     destroyCurrentInstance: () => void;
 }
 
 export type Storage = {
-    save: <T>(key: string, value: T) => Promise<void>;
-    get: <T>(key: string) => Promise<T | null>;
+    save: <T>(key: string, value: T) => void | Promise<void>;
+    get: <T>(key: string) => T | null | Promise<T | null>;
     clear: () => Promise<void> | void;
 };
 
-type Notification = {
-    text?: string;
-    type?: "success" | "error" | "warning";
-};
+export const createWebStorage = (): Storage => {
+    function clearLocalStoragePrefix(prefix: string) {
+        // Collect keys first (avoid mutating while iterating)
+        const keysToRemove = [];
 
-type PushNotificationHandler = (notification: string | Notification) => void;
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith(prefix)) {
+                keysToRemove.push(key);
+            }
+        }
+
+        // Now remove them
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+    }
+    const keyPrefix = "KT-API:";
+    const getFullKey = (key: string) => {
+        return `${keyPrefix}${key}`;
+    };
+    return {
+        clear() {
+            clearLocalStoragePrefix(keyPrefix);
+        },
+        get(key) {
+            const result = localStorage.getItem(getFullKey(key));
+            if (!result) {
+                return null;
+            }
+
+            return JSON.parse(result);
+        },
+        save(key, value) {
+            if (!value) {
+                localStorage.removeItem(getFullKey(key));
+            }
+            localStorage.setItem(getFullKey(key), JSON.stringify(value));
+        },
+    };
+};
 
 type BaseUrl = string;
 type GetToken = () => string | undefined;
@@ -103,7 +137,7 @@ type SocketProps = {
     baseUrl: BaseUrl;
     storage?: Storage;
     channellingRequestTimeout?: number;
-    beforeReconnect?: (options: Partial<ManagerOptions & SocketOptions>) => void | boolean | Promise<void | boolean>;
+    beforeReconnect?: (options: Partial<ManagerOptions & SocketOptions>) => void | boolean;
     query?: any;
     scope?: string;
     noCaching?: () => boolean;
@@ -111,10 +145,23 @@ type SocketProps = {
     autoConnect?: boolean;
     autoReconnect?: boolean;
     transports?: string[];
-    reconnectPeriod?: number;
     appHeader?: AppHeader;
-    pushNotification?: PushNotificationHandler;
     channellingPrefix?: ChannellingPrefix;
+};
+export type RequestError = {
+    statusCode: number;
+    errors: {
+        error: string;
+        errors?: string[] | undefined;
+        data?: any;
+    }[];
+};
+
+export const extractApiError = (error: any): RequestError | null => {
+    if (isNumber(error?.statusCode) && Array.isArray(error?.errors) && typeof error?.errors[0]?.error == "string") {
+        return error as RequestError;
+    }
+    return null;
 };
 
 export const createSocketClient = <
@@ -123,9 +170,6 @@ export const createSocketClient = <
 >(
     props: SocketProps
 ) => {
-    const secure = () => {
-        return props.baseUrl?.startsWith("https");
-    };
     if (props.autoConnect === undefined) {
         props.autoConnect = true;
     }
@@ -144,19 +188,6 @@ export const createSocketClient = <
         };
     };
 
-    const host = () => {
-        return props.baseUrl.match(/(?<=^https?:\/\/)(.+?)(?:\:([0-9]{1,4}))?(\/.*?)?$/i)?.[1];
-    };
-
-    const port = () => {
-        const specifiedPort = props.baseUrl.match(/(?<=^https?:\/\/)(.+?)(?:\:([0-9]{1,4}))?(\/.*?)?$/i)?.[2];
-        if (specifiedPort) {
-            return Number(specifiedPort);
-        }
-
-        return secure() ? 443 : 80;
-    };
-
     let socketInstance: ExtendedSocket | null = null;
 
     const onceConnectQueue = [] as (() => void | Promise<void>)[];
@@ -165,14 +196,14 @@ export const createSocketClient = <
             try {
                 await cb();
             } catch (error) {
-                console.log(error);
+                console.error(error);
             }
         } else {
             onceConnectQueue.push(async () => {
                 try {
                     await cb();
                 } catch (error) {
-                    console.log("once connect error", error);
+                    console.error("once connect error", error);
                 }
             });
         }
@@ -181,21 +212,19 @@ export const createSocketClient = <
     const onConnectListeners = [] as (() => void | Promise<void>)[];
     const onConnect = async (cb: () => any) => {
         const listener = async () => {
-            setTimeout(async () => {
-                try {
-                    await cb();
-                } catch (error) {
-                    console.log("onConnect listener error", error);
-                }
-            }, 400);
+            try {
+                await cb();
+            } catch (error) {
+                console.error("onConnect listener error", error);
+            }
         };
         onConnectListeners.push(listener);
         if (socketInstance?.connected) {
             await listener();
         }
         return () => {
-            const index = onConnectListeners.findIndex((l) => l === listener);
-            if (index != -1) {
+            const index = onConnectListeners.indexOf(listener);
+            if (index !== -1) {
                 onConnectListeners.splice(index, 1);
             }
         };
@@ -203,21 +232,19 @@ export const createSocketClient = <
     const onDisconnectListeners = [] as (() => void | Promise<void>)[];
     const onDisconnect = async (cb: () => any) => {
         const listener = async () => {
-            setTimeout(async () => {
-                try {
-                    await cb();
-                } catch (error) {
-                    console.log("onDisconnect listener error", error);
-                }
-            }, 400);
+            try {
+                await cb();
+            } catch (error) {
+                console.error("onDisconnect listener error", error);
+            }
         };
         onDisconnectListeners.push(listener);
         if (!socketInstance?.connected) {
             await listener();
         }
         return () => {
-            const index = onDisconnectListeners.findIndex((l) => l === listener);
-            if (index != -1) {
+            const index = onDisconnectListeners.indexOf(listener);
+            if (index !== -1) {
                 onDisconnectListeners.splice(index, 1);
             }
         };
@@ -229,12 +256,12 @@ export const createSocketClient = <
             listener: (...args: any[]) => any | Promise<any>;
         }[];
     };
-    const on = async (event: string, cb: (...args: any[]) => any | Promise<any>) => {
+    const on = (event: string, cb: (...args: any[]) => any | Promise<any>) => {
         const listener = async (...args: any[]) => {
             try {
                 await cb(...args);
             } catch (error) {
-                console.log("onDisconnect listener error", error);
+                console.error("on listener error", error);
             }
         };
         if (!onListeners[event]) {
@@ -244,37 +271,35 @@ export const createSocketClient = <
         socketInstance?.on(event, listener);
 
         return () => {
-            const index = onListeners[event]?.findIndex((l) => l.listener === listener);
-            if (index != -1 && isNumber(index)) {
-                onListeners[event].splice(index, 1);
+            const listeners = onListeners[event];
+            if (!listeners) return;
+            const index = listeners.findIndex(l => l.listener === listener);
+            if (index !== -1) {
+                listeners.splice(index, 1);
+                socketInstance?.off(event, listener);
             }
-            socketInstance?.off(event, listener);
         };
     };
-    const off = async (event: string, cb: (...args: any[]) => any | Promise<any>) => {
-        const index = onListeners[event]?.findIndex((l) => l.listener === cb || l.originalCB === cb);
-        if (!isNumber(index)) {
-            return;
-        }
-        if (index != -1) {
-            socketInstance?.off(event, onListeners[event][index].listener);
-            onListeners[event].splice(index, 1);
+    const off = (event: string, cb: (...args: any[]) => any | Promise<any>) => {
+        const listeners = onListeners[event];
+        if (!listeners) return;
+        const index = listeners.findIndex(l => l.listener === cb || l.originalCB === cb);
+        if (index !== -1) {
+            socketInstance?.off(event, listeners[index].listener);
+            listeners.splice(index, 1);
         }
     };
 
-    let manualDisconnect = false;
     const disconnect = () => {
-        manualDisconnect = true;
         socketInstance?.disconnect();
     };
+
+    let isConnected = false;
 
     const reconnect = () => {
         const options = {} as Partial<ManagerOptions & SocketOptions>;
 
-        const authBody = auth();
-        if (Object.values(authBody)?.filter((e) => !!e).length) {
-            options.auth = authBody;
-        }
+        options.auth = props.getToken || props.appHeader ? cb => cb(auth()) : undefined;
 
         if (props.query) {
             options.query = props.query;
@@ -299,45 +324,40 @@ export const createSocketClient = <
 
         socketInstance?.destroyCurrentInstance();
 
-        socketState.connected = false;
+        isConnected = false;
         options.autoConnect = true;
         options.reconnection = props.autoReconnect;
 
-        let destroyed = false;
         let currentInstance: null | ExtendedSocket = null;
 
         const ioSocket = io(props.baseUrl, options);
         currentInstance = socketInstance = Object.assign(ioSocket, {
             destroyCurrentInstance: () => {
-                destroyed = true;
                 currentInstance?.disconnect();
                 currentInstance = null;
+                socketInstance = null;
             },
         });
-        console.log("reconnecting socket", props.baseUrl, options);
 
-        socketInstance.on("connectError", (error) => {
+        socketInstance.on("connectError", error => {
             console.log("Socket Connection Error", error);
         });
 
-        socketInstance.on("disconnect", async (reason, description) => {
-            socketState.connected = false;
-            await Promise.all(onDisconnectListeners.map((cb) => cb()));
-            if (manualDisconnect) {
-                manualDisconnect = false;
-            }
+        socketInstance.on("disconnect", async () => {
+            isConnected = false;
+            await Promise.all(onDisconnectListeners.map(cb => cb()));
         });
 
         socketInstance.once("connect", async () => {
-            await Promise.all(onceConnectQueue.splice(0).map((cb) => cb()));
+            await Promise.all(onceConnectQueue.splice(0).map(cb => cb()));
         });
-        socketInstance.on("connect", async () => {
-            setTimeout(() => {
-                socketState.connected = true;
-            }, 400);
 
-            await Promise.all(onConnectListeners.map((cb) => cb()));
+        socketInstance.on("connect", async () => {
+            isConnected = true;
+
+            await Promise.all(onConnectListeners.map(cb => cb()));
         });
+
         for (const event in onListeners) {
             for (const l of onListeners[event]) {
                 socketInstance.on(event, l.listener);
@@ -356,37 +376,15 @@ export const createSocketClient = <
 
         return new Promise((resolve, reject) => {
             if (!socketInstance) {
-                reject(new Error("Socket is not connected"));
+                return reject(new Error("Socket is not connected"));
             }
             socketInstance
-                ?.timeout(options.timeout || 6e4)
+                .timeout(options.timeout || 6e4)
                 .emit(event, body || null, (internalError: any, response: any) => {
-                    if (!internalError && !response.error && !response.err) {
+                    if (!internalError && !response?.error && !response?.err && !response?.errors) {
                         return resolve(response);
                     } else {
-                        const error = internalError || response.error || response.err || {};
-                        if (error?.statusCode || error?.status) {
-                            error.status = error?.statusCode || error?.status;
-                            error.statusCode = error?.statusCode || error?.status;
-                        }
-
-                        error.message =
-                            error?.message ||
-                            error?.msg ||
-                            error?.error?.message ||
-                            error?.error?.msg ||
-                            error?.err?.message ||
-                            error?.err?.msg ||
-                            "unknown error occurred";
-                        if (!options.quiet) {
-                            if (error.message == "event not found") {
-                            } else {
-                                props.pushNotification?.(error.message);
-                            }
-                        }
-                        error.msg = error.message;
-
-                        return reject(error);
+                        return reject(internalError || response);
                     }
                 });
         });
@@ -400,58 +398,53 @@ export const createSocketClient = <
         }
     ): Promise<T> {
         const matchBody = {
-            event: event,
-            body: body,
+            event,
+            body,
         };
         const key = JSON.stringify(matchBody);
-
         const storage = props.storage;
+        const noCaching = props.noCaching?.() === true;
+
         const refetch = async (): Promise<T> => {
             const response = await performAsyncEmit<T>(event, body, options);
             if (storage && typeof options?.sinceMins == "number" && options?.sinceMins > 0) {
                 try {
                     await storage.save(key, {
                         timestamp: Date.now(),
-                        response: response,
+                        response,
                     });
                 } catch (error) {
+                    console.error(error);
                     await storage.clear();
                     await storage.save(key, {
                         timestamp: Date.now(),
-                        response: response,
+                        response,
                     });
                 }
             }
             return response;
         };
-        if (props.noCaching?.() === true) {
+
+        if (noCaching) {
             return await refetch();
         }
 
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
             const localCache = await storage?.get<any>(key);
-            if (localCache) {
-                const cachedResponse = localCache || {};
-                if (
-                    !!cachedResponse.timestamp &&
-                    (Date.now() - parseInt(cachedResponse.timestamp)) / 60e3 < options.sinceMins
-                ) {
-                    return cachedResponse.response;
-                } else {
-                    return await refetch();
+            if (localCache?.timestamp) {
+                const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
+                    return localCache.response;
                 }
-            } else {
-                return await refetch();
             }
-        } else {
-            return await refetch();
         }
+        return await refetch();
     } as AsyncEmit;
 
     const socketState = {
         reconnect,
         socket: () => socketInstance,
-        connected: false,
+        isConnected: () => isConnected,
         asyncEmit: asyncEmit,
         on: on as OnEvent,
         off,
@@ -512,46 +505,48 @@ export type ApiProps = {
     scope?: ApiScope;
     httpOnly?: () => boolean;
     storage?: Storage;
-    pushNotification?: PushNotificationHandler;
     onUnauthorized?: onUnauthorized;
     channelling?: {
-        Buffer: BufferConstructor;
-        fetchChannelsListRoutePath?: string;
-        fetchChannelsListMethod?: "GET" | "POST" | "PUT";
         useChannelling: boolean;
         channellingRequestTimeout?: number;
         beforeReconnect?: (
             options: Partial<ManagerOptions & SocketOptions>
         ) => void | boolean | Promise<void | boolean>;
         query?: any;
-        onDisconnect?: (reason: string, description: string) => void | Promise<void>;
         autoConnect?: boolean;
         autoReconnect?: boolean;
         transports?: string[];
-        reconnectPeriod?: number;
         channellingPrefix?: ChannellingPrefix;
     };
 };
 
-export type DefaultApiPost = <T = any, R = AxiosResponse<T>, D = any>(
+export type DefaultApiPost = <T = any, D = any>(
     url: string,
     data?: D,
     config?: RequestConfig<D>
-) => Promise<R>;
+) => Promise<{
+    data: T;
+}>;
 
-export type DefaultApiPut = <T = any, R = AxiosResponse<T>, D = any>(
+export type DefaultApiPut = <T = any, D = any>(
     url: string,
     data?: D,
     config?: RequestConfig<D>
-) => Promise<R>;
-export type DefaultApiDelete = <T = any, R = AxiosResponse<T>, D = any>(
+) => Promise<{
+    data: T;
+}>;
+export type DefaultApiDelete = <T = any, D = any>(
     url: string,
     config?: RequestConfig<D>
-) => Promise<R>;
-export type DefaultApiGet = <T = any, R = AxiosResponse<T>, D = any>(
+) => Promise<{
+    data: T;
+}>;
+export type DefaultApiGet = <T = any, D = any>(
     url: string,
     config?: RequestConfig<D>
-) => Promise<R>;
+) => Promise<{
+    data: T;
+}>;
 
 type DefaultOnEvent = (
     event: string,
@@ -568,13 +563,19 @@ export const createApiClient = <
 >(
     props: ApiProps
 ) => {
-    let socket: null | ReturnType<typeof createSocketClient<AsyncEmit, OnEvent>> = null;
-    const socketProps = {} as SocketProps;
+    const socketProps: SocketProps = {
+        baseUrl: props.baseUrl,
+        autoConnect: false,
+    };
+    const socket: ReturnType<typeof createSocketClient<AsyncEmit, OnEvent>> = createSocketClient(socketProps);
 
     const updateSocketConfig = () => {
         if (props.channelling) {
             for (const key in props.channelling) {
                 (socketProps as any)[key] = (props as any).channelling[key];
+            }
+            if (props.channelling.autoConnect === undefined) {
+                socketProps.autoConnect = true;
             }
         }
         socketProps.scope = props.scope;
@@ -582,70 +583,30 @@ export const createApiClient = <
         socketProps.baseUrl = props.baseUrl;
         socketProps.appHeader = props.appHeader;
         socketProps.getToken = props.getToken;
-        socketProps.pushNotification = props.pushNotification;
         socketProps.noCaching = props.noCaching;
     };
+
     const setSocket = () => {
         updateSocketConfig();
-        if (!socket) {
-            socket = createSocketClient<AsyncEmit, OnEvent>(socketProps);
-        } else {
-            socket.reconnect();
-        }
+        socket.reconnect();
     };
+
     const removeSocket = () => {
-        socket?.socket()?.destroyCurrentInstance();
-        socket = null;
-    };
-
-    const getChannelNamesFromBackend = async (props: {
-        baseUrl: string;
-        httpPrefix?: HttpPrefix;
-        fetchChannelsRoutePath: string;
-        method: "GET" | "POST" | "PUT";
-    }) => {
-        const response = await axios({
-            url: props.baseUrl + path.join(props.httpPrefix || "", props.fetchChannelsRoutePath),
-            method: props.method,
-        });
-        const names = response.data as string[];
-        return names;
-    };
-    const channels = [] as string[];
-
-    const reloadChannelsList = async () => {
-        if (
-            process.env.NODE_ENV !== "test" &&
-            props.channelling?.fetchChannelsListMethod &&
-            props.channelling?.fetchChannelsListRoutePath
-        ) {
-            const names = await getChannelNamesFromBackend({
-                httpPrefix: props.httpPrefix,
-                baseUrl: props.baseUrl,
-                fetchChannelsRoutePath: props.channelling?.fetchChannelsListRoutePath,
-                method: props.channelling.fetchChannelsListMethod,
-            });
-            channels.push(...names);
-        }
+        socket.socket()?.destroyCurrentInstance();
     };
 
     const reloadSocket = () => {
-        if (props.channelling) {
+        if (props.channelling?.useChannelling) {
             setSocket();
         } else {
             removeSocket();
         }
     };
 
-    const httpRequestTimeout = () => {
-        if (props.httpRequestTimeout) {
-            return props.httpRequestTimeout;
-        }
-        return 120e3;
-    };
+    const httpRequestTimeoutValue = props.httpRequestTimeout ?? 120e3;
 
     const modifyHttpRequestConfig = (config: InternalAxiosRequestConfig<any> & { notScoped?: boolean }) => {
-        config.timeout = httpRequestTimeout();
+        config.timeout = httpRequestTimeoutValue;
         config.baseURL = path.join(props.baseUrl, props.httpPrefix || "", config.notScoped ? "" : props.scope || "");
 
         const token = props.getToken?.();
@@ -661,43 +622,10 @@ export const createApiClient = <
         return config;
     };
     const httpErrorResponseHandler = async (error: any) => {
-        const err = error.response;
-
-        const response = error.response;
-
-        if (response && response.status === 423) {
+        const response = error?.response;
+        if (response && response.status === 401) {
             await props.onUnauthorized?.();
         }
-
-        error.message =
-            error.response?.data?.error?.msg ||
-            error.response?.data?.error?.message ||
-            error.response?.data?.error?.name ||
-            error.response?.data?.msg ||
-            error.response?.data?.message ||
-            error.response?.data?.name ||
-            error.msg ||
-            error.message;
-
-        if (!error?.response || error?.response?.status === 502) {
-            error.networkError = true;
-            error.message = "Connection Error";
-            if (!error?.config?.quiet) {
-                props.pushNotification?.({
-                    text: "Connection Error please try again" + "\n" + error.message,
-                    type: "error",
-                });
-            }
-        } else if (error.message) {
-            if (!error?.config?.quiet) {
-                props.pushNotification?.({
-                    text: `Error Occurred: ${error.message}`,
-                    type: "error",
-                });
-            }
-        }
-        error.msg = error.message;
-
         throw error;
     };
     const createHttpInstance = (): ApiInterface<Post, Put, Delete, Get> => {
@@ -710,37 +638,35 @@ export const createApiClient = <
         Api._post = Api.post;
         Api._get = Api.get;
         Api._delete = Api.delete;
+        Api.put = createDispatcherWithCachingWithBody("put") as any;
+        Api.post = createDispatcherWithCachingWithBody("post") as any;
+        Api.delete = createDispatcherWithCachingNoBody("delete") as any;
+        Api.get = createDispatcherWithCachingNoBody("get") as any;
         return Api;
     };
-    let Api = createHttpInstance();
+    const Api: ApiInterface<Post, Put, Delete, Get> = createHttpInstance();
     const reloadHttpInstance = () => {
-        Api = createHttpInstance();
+        Object.assign(Api, createHttpInstance());
     };
 
-    const reloadConfig = async (updatedProps?: ApiProps) => {
+    const reloadConfig = (updatedProps?: Partial<ApiProps>) => {
         if (updatedProps) {
             for (const key in updatedProps) {
-                (props as any)[key] = (updatedProps as any)[key];
+                if (updatedProps[key] !== undefined) {
+                    (props as any)[key] = (updatedProps as any)[key];
+                }
             }
         }
         reloadHttpInstance();
         reloadSocket();
-        await reloadChannelsList();
     };
 
-    reloadSocket();
-    reloadChannelsList().catch((err) => console.log("failed to load channels with error: ", err));
-
     const isSocketEmitPossible = <D>(url: string, options: RequestConfig<D>) => {
-        const result =
-            !!(
-                !channels.length ||
-                channels.find((e) => trimSlashes(e, true, true).endsWith(trimSlashes(url, true, true)))
-            ) &&
-            !(props.httpOnly?.() === true) &&
-            !!socket?.connected &&
-            !!(!options?.requestVia || options.requestVia.includes("socket"));
-        return result;
+        return (
+            props.httpOnly?.() !== true &&
+            socket?.isConnected() === true &&
+            (!options?.requestVia || options.requestVia.includes("socket"))
+        );
     };
 
     const attemptToSaveToStorage = async <T>(key: string, value: T) => {
@@ -756,6 +682,7 @@ export const createApiClient = <
                 },
             });
         } catch (error) {
+            console.error(error);
             storage.clear();
             await storage.save(key, {
                 timestamp: Date.now(),
@@ -772,26 +699,24 @@ export const createApiClient = <
 
     const modifySocketDispatch = <D>(details: RequestDispatchDetails<D>) => {
         const options = { ...details.options };
-
-        if (!options.headers) {
-            options.headers = {};
-        }
+        const headers = options.headers || {};
 
         const token = props.getToken?.();
         if (token) {
-            options.headers.authorization = token;
+            headers.authorization = token;
         }
         const appHeader = props.appHeader;
         if (appHeader) {
-            options.headers["x-app"] = appHeader;
-            options.headers["app"] = appHeader;
+            headers["x-app"] = appHeader;
+            headers["app"] = appHeader;
         }
 
+        options.headers = headers;
         return { ...details, options };
     };
 
     const dispatchRequestViaSocket = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
-        if (!props.channelling || !socket?.connected) {
+        if (!props.channelling || !socket?.isConnected()) {
             throw new Error("Socket is not connected");
         }
 
@@ -804,18 +729,15 @@ export const createApiClient = <
 
         const emitBody = {
             ...body,
-            provided__query: options.params,
-            provided__headers: options.headers,
+            __query: options.params,
+            __headers: options.headers,
         };
 
-        const compressedResponseBody: any = await socket.performAsyncEmit(url, emitBody, {
-            timeout: 6e4,
+        const responseBody: any = await socket.performAsyncEmit(url, emitBody, {
+            timeout: httpRequestTimeoutValue,
             notScoped: details.options.notScoped,
             quiet: details.options.quiet,
         });
-        const Buffer = props.channelling?.Buffer;
-        const buffer = Buffer.from(compressedResponseBody);
-        const responseBody = JSON.parse(pako.inflate(buffer, { to: "string" }));
 
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0) {
             await attemptToSaveToStorage(key, responseBody);
@@ -826,17 +748,15 @@ export const createApiClient = <
 
     const dispatchRequestViaHttp = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { url, options, method, key } = details;
-        let response: R;
-        if (details.method === "post" || details.method === "put") {
-            const body = details.body;
-            response = (await (Api as any)?.[`_${method}`]?.(url, body, options)) as R;
-        } else {
-            response = (await (Api as any)?.[`_${method}`]?.(url, options)) as R;
-        }
+        const apiMethod = (Api as any)?.[`_${method}`];
+        const response = details.method === "post" || details.method === "put"
+            ? await apiMethod?.(url, details.body, options)
+            : await apiMethod?.(url, options);
+        
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && props.storage) {
-            await attemptToSaveToStorage(key, (response as any).data);
+            await attemptToSaveToStorage(key, response.data);
         }
-        return response;
+        return { data: response.data } as R;
     };
 
     const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
@@ -847,7 +767,8 @@ export const createApiClient = <
                 return await dispatchRequestViaSocket<D, R>(details);
             } catch (error: any) {
                 console.log("socket dispatch error", error);
-                if (isNumber(error?.status) && error?.status >= 400 && error?.status < 500) {
+                const statusCode = error?.status || error?.statusCode;
+                if (isNumber(statusCode) && statusCode >= 400 && statusCode < 500) {
                     console.log("Event Error", error);
                     throw error;
                 }
@@ -856,77 +777,117 @@ export const createApiClient = <
         return await dispatchRequestViaHttp<D, R>(details);
     };
 
-    const createDispatcherWithCaching = (method: "get" | "post" | "put" | "delete") =>
-        async function <T = any, R = AxiosResponse<T>, D = any>(
+    const createDispatcherWithCachingWithBody = (method: "post" | "put") =>
+        async function <T = any, D = any>(
             url: string,
             body: D,
             options: RequestConfig<D> = { sinceMins: 0 }
-        ): Promise<R> {
+        ): Promise<{
+            data: T;
+        }> {
+            type R = {
+                data: T;
+            };
+
+            const noCaching = props.noCaching?.() === true;
+            const requestDetails = {
+                method,
+                body,
+                options,
+                url,
+            } as const;
+
+            if (noCaching) {
+                return await dispatchRequest<D, R>({
+                    ...requestDetails,
+                    key: "",
+                });
+            }
+
             const matchBody = {
-                url: url,
-                body: body,
+                url,
+                body,
+                query: options.params,
             };
             const key = JSON.stringify(matchBody);
 
-            if (props.noCaching?.() === true) {
-                return await dispatchRequest<D, R>({
-                    method,
-                    body,
-                    key,
-                    options,
-                    url,
-                });
-            }
-
             if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
                 const localCache = await props.storage?.get<any>(key);
-
-                if (localCache) {
-                    const cachedResponse = localCache || {};
-                    if (
-                        !!cachedResponse.timestamp &&
-                        (Date.now() - parseInt(cachedResponse.timestamp)) / 60e3 < options.sinceMins
-                    ) {
-                        return cachedResponse.response;
+                if (localCache?.timestamp) {
+                    const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
+                        return localCache.response;
                     }
-
-                    return await dispatchRequest<D, R>({
-                        method,
-                        body,
-                        key,
-                        options,
-                        url,
-                    });
                 }
-                return await dispatchRequest<D, R>({
-                    method,
-                    body,
-                    key,
-                    options,
-                    url,
-                });
             }
 
             return await dispatchRequest<D, R>({
-                method,
-                body,
+                ...requestDetails,
                 key,
-                options,
-                url,
             });
         };
 
-    Api.put = createDispatcherWithCaching("put") as any;
-    Api.post = createDispatcherWithCaching("post") as any;
-    Api.delete = createDispatcherWithCaching("delete") as any;
-    Api.get = createDispatcherWithCaching("get") as any;
+    const createDispatcherWithCachingNoBody = (method: "get" | "delete") =>
+        async function <T = any, D = any>(
+            url: string,
+            options: RequestConfig<D> = { sinceMins: 0 }
+        ): Promise<{
+            data: T;
+        }> {
+            type R = {
+                data: T;
+            };
 
-    return {
-        Api,
-        socket: socket as null | ReturnType<typeof createSocketClient<AsyncEmit, OnEvent>>,
+            const noCaching = props.noCaching?.() === true;
+            const requestDetails = {
+                method,
+                options,
+                url,
+            } as const;
+
+            if (noCaching) {
+                return await dispatchRequest<D, R>({
+                    ...requestDetails,
+                    key: "",
+                });
+            }
+
+            const matchBody = {
+                url,
+                query: options.params,
+            };
+            const key = JSON.stringify(matchBody);
+
+            if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
+                const localCache = await props.storage?.get<any>(key);
+                if (localCache?.timestamp) {
+                    const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
+                        return localCache.response;
+                    }
+                }
+            }
+
+            return await dispatchRequest<D, R>({
+                ...requestDetails,
+                key,
+            });
+        };
+
+    reloadConfig();
+
+    const state = {
+        close: () => {
+            try {
+                socket.socket()?.destroyCurrentInstance();
+            } catch {}
+        },
+        api: Api,
+        socket: socket,
         reloadConfig,
-        reloadChannelsList,
         reloadHttpInstance,
         reloadSocket,
     };
+
+    return state;
 };

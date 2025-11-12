@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+
+// oxlint-disable no-async-promise-executor
 import "dotenv";
 const axios = (await import("axios")).default;
-const unzipper = await import("unzipper");
 import { program } from "commander";
 
 import fs from "fs";
@@ -13,7 +14,7 @@ const __process = process;
 const currentDir = (() => {
     try {
         return url.fileURLToPath(new url.URL("./.", import.meta.url));
-    } catch (error) {
+    } catch {
         return __dirname;
     }
 })();
@@ -34,6 +35,7 @@ const findProjectRoot = async (currentDir = parentProjectPath): Promise<string> 
 
     return findProjectRoot(parentDir);
 };
+
 const currentPackagePath = await findProjectRoot();
 const mainProjectPath = await findProjectRoot(path.resolve("."));
 
@@ -44,8 +46,7 @@ const packageDotJsonFullPath = path.join(mainProjectPath, "./package.json");
 const packageDotJson: {
     [key: string]: any;
     apiTypes?: {
-        apiPrefix: string;
-        assetsPrefix: string;
+        apiPrefix?: string;
         baseUrl: string;
         scope?: string;
     };
@@ -56,8 +57,7 @@ if (!packageDotJson["apiTypes"]) {
         "Please provide api types loading config in package.json before loading api types as in ",
         `
 {
-    "apiPrefix": string;
-    "assetsPrefix": string;
+    "apiPrefix"?: string;
     "baseUrl": string; 
     "scope"?: string;
 }
@@ -68,10 +68,9 @@ For example
 {
     ...
     "apiTypes": {
-        "apiPrefix": "server/api",
-        "assetsPrefix": "server/assets",
+        "apiPrefix": "server/api", // default "/"
         "baseUrl": "http://localhost:3000", // your js-katana server host and port
-        "scope": "dashboard",
+        "scope": "dashboard",  // default null (no scope all routes)
     }
     ...
 }
@@ -92,52 +91,41 @@ program
 const trimSlashes = (s: string) => {
     return s.replace(/\/$/, "").replace(/^\//, "");
 };
+
 const join = (...paths: string[]) => {
     return paths.map(s => trimSlashes(s)).join("/");
 };
 
-const extractApiError = (error: any) => {
-    error.message =
-        error.response?.data?.err?.msg ||
-        error.response?.data?.err?.message ||
-        error.response?.data?.error?.msg ||
-        error.response?.data?.error?.message ||
-        error.response?.data?.error?.name ||
-        error.response?.data?.msg ||
-        error.response?.data?.message ||
-        error.response?.data?.name ||
-        error.msg ||
-        error.message ||
-        error.name;
+export type RequestError = {
+    statusCode: number;
+    errors: {
+        error: string;
+        errors?: string[] | undefined;
+    }[];
 };
 
-interface DynamicAuthorities {
-    values?: Array<string | number>;
-    requestLookupCb?: string;
-    dynamicAuthorityKey?: string;
-}
+export const isNumber = function (num: any) {
+    if (typeof num === "number") {
+        return num - num === 0;
+    }
+    if (typeof num === "string" && num.trim() !== "") {
+        return Number.isFinite ? Number.isFinite(+num) : isFinite(+num);
+    }
+    return false;
+};
 
-interface Authority {
-    keyName: string;
-    dynamicAuthorities?: { [key: string]: DynamicAuthorities };
-}
+const extractApiError = (error: any): RequestError | null => {
+    if (isNumber(error?.statusCode) && Array.isArray(error?.errors) && typeof error?.errors[0]?.error == "string") {
+        return error as RequestError;
+    }
+    return null;
+};
 
-type ArrayAuthorities = Array<Authority>;
-
-interface AuthorizationOption {
-    or?: ArrayAuthorities | Array<string>;
-    and?: ArrayAuthorities | Array<string>;
-}
-
-export type ChannelsDescriptionProps = {
+export type ChannelDescriptionProps = {
     fileUrl: string;
     path?: string;
     fullChannelPath?: string;
     requiresAuth?: boolean;
-    requiresAuthorities?: {
-        allow?: AuthorizationOption;
-        reject?: AuthorizationOption;
-    };
     descriptionText?: string;
     requestBodyTypeString?: string;
     additionalTypes?: string;
@@ -145,15 +133,11 @@ export type ChannelsDescriptionProps = {
     descriptionFileFullPath?: string;
 };
 
-export type DescriptionProps = {
+export type RouteDescriptionProps = {
     fileUrl: string;
     path?: string;
     fullRoutePath?: string;
     requiresAuth?: boolean;
-    requiresAuthorities?: {
-        allow?: AuthorizationOption;
-        reject?: AuthorizationOption;
-    };
     descriptionText?: string;
     method: "all" | "get" | "put" | "post" | "delete";
     requestParamsTypeString?: string;
@@ -177,37 +161,32 @@ export type EventDescriptionProps = {
 };
 
 program
-    .command("loadTypes")
+    .command("load-types")
     .alias("l")
     .option("-s", "--scope <SCOPE>")
     .option("--apiPrefix <apiPrefix>")
-    .option("--assetsPrefix <assetsPrefix>")
     .option("-b", "--baseUrl <BASEURL>")
     .description("use it to load api types from server")
-    .action(async ({ scope, apiPrefix, assetsPrefix, baseUrl }: { [key: string]: string }) => {
-        if (!packageDotJson["apiTypes"]) {
+    .action(async ({ scope, apiPrefix, baseUrl }: { [key: string]: string }) => {
+        if (!baseUrl && !packageDotJson["apiTypes"]) {
             console.error(
                 "Please provide api types loading config in package.json before loading api types as in ",
-                `{
-                "apiPrefix": string;
-                "assetsPrefix": string;
-                "baseUrl": string; 
-                scope?: string;
-                "secret": string;  
-            }`
+                `
+{
+    "apiPrefix": string;
+    "assetsPrefix": string;
+    "baseUrl": string; 
+    scope?: string;
+    "secret": string;  
+}`
             );
             __process.exit(1);
+            return;
         }
 
         const apiTypesDirFullPath = path.join(currentPackagePath, "/apiTypes");
         fs.mkdirSync(apiTypesDirFullPath, { recursive: true });
-        const clientArchiveFullPath = path.join(apiTypesDirFullPath, "client.zip");
-        if (!scope) {
-            if (!packageDotJson["apiTypes"]?.scope) {
-                console.error("please provide valid scope in package.json apiTypes");
-                __process.exit(1);
-                return;
-            }
+        if (!scope && packageDotJson["apiTypes"]) {
             scope = packageDotJson["apiTypes"]?.scope;
         }
 
@@ -218,104 +197,67 @@ program
         if (!apiPrefix && packageDotJson["apiTypes"]?.["apiPrefix"]) {
             apiPrefix = packageDotJson["apiTypes"]?.["apiPrefix"];
         }
-        apiPrefix = join(baseUrl, apiPrefix);
+        let fullBasePath: string = baseUrl;
 
-        if (!assetsPrefix && packageDotJson["apiTypes"]?.["assetsPrefix"]) {
-            assetsPrefix = packageDotJson["apiTypes"]?.["assetsPrefix"];
+        if (apiPrefix) {
+            fullBasePath = join(baseUrl, apiPrefix);
         }
-        assetsPrefix = join(baseUrl, assetsPrefix);
+
         const dotEnv: any = process.env;
-        const getFromEnv = (key: string): any => {
+
+        const getFromEnv = (key: string): string | undefined | null => {
             return dotEnv[key] || dotEnv[key.toLowerCase()] || dotEnv[key.toUpperCase()];
         };
 
-        const secret = getFromEnv("description_secret");
-        if(!secret){
-            console.error("Please provide description secret in your environment DESCRIPTION_SECRET=\"YOUR SECRET\"")
-            process.exit(1)
+        let secret = getFromEnv("description_secret");
+        if (!secret) {
+            console.warn(
+                'there is no secret provided, if it is required provide description secret in your environment DESCRIPTION_SECRET="YOUR SECRET"'
+            );
         }
-
-        const loadPrismaClient = () => {
-            return new Promise(async (resolve, reject) => {
-                try {
-                    console.log("Loading Client");
-                    const response = await axios({
-                        data: {
-                            secret: secret,
-                        },
-                        method: "post",
-                        url: join(`${apiPrefix}`, `/apiDescription/prismaCompressedClient`),
-                        responseType: "stream",
-                    });
-
-                    console.log("downloading prisma client...");
-                    const stream = response.data;
-
-                    const fileWriteStream = fs.createWriteStream(clientArchiveFullPath);
-
-                    stream.pipe(fileWriteStream);
-                    stream.on("error", error => {
-                        console.log(error);
-                        reject(error);
-                    });
-
-                    fileWriteStream.on("finish", () => {
-                        console.log("finished downloading client\n\nExtracting Client...");
-                        fs.createReadStream(clientArchiveFullPath)
-                            .pipe(unzipper.Extract({ path: apiTypesDirFullPath }))
-                            .on("finish", () => {
-                                console.log("Client Extraction complete");
-                                resolve(true);
-                            })
-
-                            .on("error", err => {
-                                if (err.message == "FILE_ENDED") {
-                                } else {
-                                    console.error("Error during extraction:", err.message);
-                                    reject(err);
-                                }
-                            });
-                    });
-                } catch (error) {
-                    reject(error);
-                }
-            });
-        };
 
         const buildTypes = async () => {
             console.log("Building Types");
 
-            const apiDescription: { [key: string]: DescriptionProps } = (
+            type RouterDescriptionMap = {
+                [key: string]: RouteDescriptionProps;
+            };
+
+            type ChannelDescriptionMap = {
+                [key: string]: ChannelDescriptionProps;
+            };
+
+            type EventDescriptionMap = {
+                [key: string]: EventDescriptionProps;
+            };
+
+            type ApiGlobalDescription = {
+                routesDescriptions: RouterDescriptionMap;
+                channelsDescriptions: ChannelDescriptionMap;
+                eventsDescriptions: EventDescriptionMap;
+            };
+
+            const globalDescription: ApiGlobalDescription = (
                 await axios({
                     method: "get",
-                    url: join(assetsPrefix, `/apiDescriptionMap.json`),
+                    url: join(fullBasePath, `/__describe-json`),
+                    headers: secret
+                        ? {
+                              authorization: `Secret ${secret}`,
+                          }
+                        : undefined,
                 })
             ).data;
 
-            const channelsDescription: { [key: string]: ChannelsDescriptionProps } = (
-                await axios({
-                    method: "get",
-                    url: join(assetsPrefix, `/channelsDescriptionMap.json`),
-                })
-            ).data;
-
-            const eventsDescription: { [key: string]: EventDescriptionProps } = (
-                await axios({
-                    method: "get",
-                    url: join(assetsPrefix, `/eventsDescriptionMap.json`),
-                })
-            ).data;
+            const apiDescription = globalDescription.routesDescriptions;
+            const channelsDescription = globalDescription.channelsDescriptions;
+            const eventsDescription = globalDescription.eventsDescriptions;
 
             const content = [
                 `// @ts-nocheck
-import { $Enums, Prisma } from "./${path.relative(
-                    path.dirname(apiTypesFilePath),
-                    apiTypesDirFullPath
-                )}/client/index.js";
+
 import { AxiosRequestConfig, AxiosResponse } from "axios";
 import { Merge } from "../common";
-
-export {$Enums, Prisma}
 
 export type AsyncEmitOptions = {
     timeout?: number;
@@ -346,13 +288,13 @@ type OmitFunctions<T> = T extends any[]? T: Pick<T, {
 
             const routesArray = Object.values(apiDescription).filter(r => {
                 const result = trimSlashes(r.fullRoutePath || "")?.startsWith(trimSlashes(scope));
-                console.log(r.fullRoutePath, result);
+                console.log("Route: ", r.fullRoutePath, result);
                 return result;
             });
 
             const channelsArray = Object.values(channelsDescription).filter(c => {
                 const result = trimSlashes(c.fullChannelPath || "")?.startsWith(trimSlashes(scope));
-                console.log(c.fullChannelPath, result);
+                console.log("Channel: ", c.fullChannelPath, result);
                 return result;
             });
 
@@ -850,7 +792,6 @@ export type ApiDelete = <U extends ApiDeleteUrl | string>(
         };
 
         try {
-            await loadPrismaClient();
             await buildTypes();
         } catch (error: any) {
             extractApiError(error);
@@ -861,14 +802,13 @@ export type ApiDelete = <U extends ApiDeleteUrl | string>(
     });
 
 program
-    .command("resetTypes")
+    .command("reset-types")
     .alias("r")
     .description("reset types to be `any`")
     .action(async () => {
         fs.writeFileSync(
             apiTypesFilePath,
             `
-        
 import { AxiosRequestConfig, AxiosResponse } from "axios";
 
 export type RequestConfig<D> = {
@@ -912,4 +852,4 @@ export type AsyncEmitOptions = {
     });
 program.parse();
 
-export {};
+export default {};

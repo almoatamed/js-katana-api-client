@@ -4,7 +4,6 @@ import type {
     ApiGet,
     ApiPost,
     ApiPut,
-    AsyncEmitOptions,
     AsyncEmit,
     OnEvent,
 } from "../apiTypes.js";

@@ -3,11 +3,17 @@
     "version": "2.17.0",
     "description": "Js-katana Api client",
     "keywords": [
-        "js-katana",
         "api",
         "api-client",
         "js-katana-api-client",
         "kt-client",
+        "kt-js",
+        "js-kt",
+        "js-katana",
+        "katana-js",
+        "kt-cli",
+        "kt",
+        "ki",
         "kt-api-client",
         "ki",
         "ki-api",
@@ -25,35 +31,32 @@
     "author": "S. Elmotamed",
     "type": "module",
     "bin": {
-        "ki-api": "dist/main.js"
-    },
-    "directories": {
-        "test": "tests"
+        "kt-api": "dist/main.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "scripts": {
         "fmt": "prettier . --write",
-        "test": "vitest",
-        "build": "rm -rf dist && tsc",
+        "build": "rm -rf dist && tsc && chmod -r 777 ./dist",
         "prepublishOnly": "npm run build"
     },
-    "dependencies": {
+    "peerDependencies": {
+        "@tsconfig/node21": "",
+        "typescript": "^5.0.0",
         "@tsconfig/node20": "^20.1.5",
+        "@tsconfig/node23": "^23.0.2",
+        "@tsconfig/node24": "^24.0.0",
         "axios": "^1.7.7",
         "commander": "^12.1.0",
         "dotenv": "^16.5.0",
+        "fs-extra": "^11.3.2",
         "pako": "^2.1.0",
         "socket.io-client": "^4.8.1",
         "unzipper": "^0.12.3"
     },
     "devDependencies": {
         "@types/bun": "latest"
-    },
-    "peerDependencies": {
-        "@tsconfig/node21": "",
-        "typescript": "^5.0.0"
-    },
+    },    
     "module": "index.ts",
     "prettier": {
         "semi": true,
