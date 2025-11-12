@@ -1,6 +1,6 @@
 {
-    "name": "@js-katana/api-client",
-    "version": "2.17.0",
+    "name": "js-kt-client",
+    "version": "2.18.0",
     "description": "Js-katana Api client",
     "keywords": [
         "api",
@@ -37,7 +37,7 @@
     "types": "dist/index.d.ts",
     "scripts": {
         "fmt": "prettier . --write",
-        "build": "rm -rf dist && tsc && chmod -r 777 ./dist",
+        "build": "rm -rf dist && tsc && chmod -R 777 ./dist",
         "prepublishOnly": "npm run build"
     },
     "peerDependencies": {
