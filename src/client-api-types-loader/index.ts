@@ -52,35 +52,6 @@ const packageDotJson: {
     };
 } = JSON.parse(fs.readFileSync(packageDotJsonFullPath, "utf-8"));
 
-if (!packageDotJson["apiTypes"]) {
-    console.error(
-        "Please provide api types loading config in package.json before loading api types as in ",
-        `
-{
-    "apiPrefix"?: string;
-    "baseUrl": string; 
-    "scope"?: string;
-}
-
-For example 
-
-// package.json content 
-{
-    ...
-    "apiTypes": {
-        "apiPrefix": "server/api", // default "/"
-        "baseUrl": "http://localhost:3000", // your js-katana server host and port
-        "scope": "dashboard",  // default null (no scope all routes)
-    }
-    ...
-}
-
-you can drop the scope if you do not want scoped access 
-`
-    );
-    __process.exit(1);
-}
-
 const apiTypesFilePath = path.join(currentPackagePath, "apiTypes.d.ts");
 
 program
@@ -114,6 +85,10 @@ export const isNumber = function (num: any) {
     return false;
 };
 
+const isEmpty = (v: any) => {
+    return v === undefined || v === null;
+};
+
 const extractApiError = (error: any): RequestError | null => {
     if (isNumber(error?.statusCode) && Array.isArray(error?.errors) && typeof error?.errors[0]?.error == "string") {
         return error as RequestError;
@@ -139,7 +114,7 @@ export type RouteDescriptionProps = {
     fullRoutePath?: string;
     requiresAuth?: boolean;
     descriptionText?: string;
-    method: "ALL" | "GET" | "PUT" | "POST" | "DELETE" ;
+    method: "ALL" | "GET" | "PUT" | "POST" | "DELETE";
     requestParamsTypeString?: string;
     requestBodyTypeString?: string;
     requestHeadersTypeString?: string;
@@ -168,41 +143,67 @@ program
     .option("-b", "--baseUrl <BASEURL>")
     .description("use it to load api types from server")
     .action(async ({ scope, apiPrefix, baseUrl }: { [key: string]: string }) => {
-        if (!baseUrl && !packageDotJson["apiTypes"]) {
-            console.error(
-                "Please provide api types loading config in package.json before loading api types as in ",
+        if (!packageDotJson["apiTypes"]) {
+            console.warn(
+                "its better to provide api types loading config in package.json before loading api types as in ",
                 `
 {
-    "apiPrefix": string;
-    "assetsPrefix": string;
+    "apiPrefix"?: string;
     "baseUrl": string; 
-    scope?: string;
-    "secret": string;  
-}`
+    "scope"?: string;
+}
+
+For example 
+
+// package.json content 
+{
+    ...
+    "apiTypes": {
+        "apiPrefix": "server/api", // default "/"
+        "baseUrl": "http://localhost:3000", // your js-katana server host and port
+        "scope": "dashboard",  // default null (no scope all routes)
+    }
+    ...
+}
+
+you can drop the scope if you do not want scoped access 
+`
             );
-            __process.exit(1);
-            return;
         }
 
         const apiTypesDirFullPath = path.join(currentPackagePath, "/apiTypes");
         fs.mkdirSync(apiTypesDirFullPath, { recursive: true });
-        if (!scope && packageDotJson["apiTypes"]) {
-            scope = packageDotJson["apiTypes"]?.scope;
+        if (!scope) {
+            if (!isEmpty(packageDotJson["apiTypes"]?.["scope"])) {
+                scope = packageDotJson["apiTypes"]?.scope;
+            } else {
+                scope = "";
+            }
         }
 
         if (!scope) {
             scope = "";
         }
 
-        if (!baseUrl && packageDotJson["apiTypes"]?.baseUrl) {
-            baseUrl = packageDotJson["apiTypes"]?.baseUrl;
+        if (!baseUrl) {
+            if (!isEmpty(packageDotJson["apiTypes"]?.baseUrl)) {
+                baseUrl = packageDotJson["apiTypes"]?.baseUrl;
+            } else {
+                console.warn("there is no baseUrl provided, using default `http://localhost:3000` ");
+                baseUrl = "http://localhost:3000";
+            }
         }
 
-        if (!apiPrefix && packageDotJson["apiTypes"]?.["apiPrefix"]) {
-            apiPrefix = packageDotJson["apiTypes"]?.["apiPrefix"];
+        if (!apiPrefix) {
+            if (!isEmpty(packageDotJson["apiTypes"]?.["apiPrefix"])) {
+                apiPrefix = packageDotJson["apiTypes"]?.["apiPrefix"];
+            } else {
+                console.warn("there is no apiPrefix provided using `/api`");
+                apiPrefix = "/api";
+            }
         }
+
         let fullBasePath: string = baseUrl;
-
         if (apiPrefix) {
             fullBasePath = join(baseUrl, apiPrefix);
         }
@@ -241,8 +242,8 @@ program
                 eventsDescriptions: EventDescriptionMap;
             };
 
-            const descriptionRoute = join(fullBasePath, `/d__describe-json`);
-            console.log("Description Route:", descriptionRoute)
+            const descriptionRoute = join(fullBasePath, `/__describe-json`);
+            console.log("Description Route:", descriptionRoute);
 
             const globalDescription: ApiGlobalDescription = (
                 await axios({
@@ -261,9 +262,8 @@ program
             const eventsDescription = globalDescription.eventsDescriptions;
 
             const content = [
-                `// @ts-nocheck
-
-import { AxiosRequestConfig, AxiosResponse } from "axios";
+                `
+import type { AxiosRequestConfig, AxiosResponse } from "axios";
 export type Merge<T, U> = T & Omit<U, keyof T>;
 
 export type AsyncEmitOptions = {
@@ -317,6 +317,15 @@ type OmitFunctions<T> = T;
                     }
                 }
                 r.fullRoutePath = trimSlashes(r.fullRoutePath || "")?.slice(trimSlashes(scope).length);
+                r.fullRoutePath = r.fullRoutePath.replace(/:\b[_\-a-zA-Z0-9]+?\b|\[\b[_\-a-zA-Z0-9]+?\b\]/g, _match => {
+                    console.log("replacing", _match,"in", r.fullRoutePath, "with parma string");
+                    return "${string}";
+                });
+                if (r.fullRoutePath.includes("${string}")) {
+                    r.fullRoutePath = `[key: \`${r.fullRoutePath}\`]`;
+                }else {
+                    r.fullRoutePath = `"${r.fullRoutePath}"`
+                }
             }
 
             for (const c of channelsArray) {
@@ -327,6 +336,16 @@ type OmitFunctions<T> = T;
                     }
                 }
                 c.fullChannelPath = trimSlashes(c.fullChannelPath || "")?.slice(trimSlashes(scope).length);
+                c.fullChannelPath = trimSlashes(c.fullChannelPath || "")?.slice(trimSlashes(scope).length);
+                c.fullChannelPath = c.fullChannelPath.replace(/:\b[_\-a-zA-Z0-9]+?\b|\[\b[_\-a-zA-Z0-9]+?\b\]/g, _match => {
+                    console.log("replacing", _match, "in", c.fullChannelPath, "with parma string");
+                    return "${string}";
+                });
+                if (c.fullChannelPath.includes("${string}")) {
+                    c.fullChannelPath = `[key: \`${c.fullChannelPath}\`]`;
+                } else {
+                    c.fullChannelPath = `"${c.fullChannelPath}"`;
+                }
             }
 
             for (const e of eventsArray) {
@@ -423,12 +442,12 @@ export type AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmit
             } else {
                 content.push(`
     
-export type AsyncEmitEvents = ${channelsArray.map(c => `"${c.fullChannelPath}"`).join(" | ")};
+export type AsyncEmitEvents = ${channelsArray.map(c => `${c.fullChannelPath}`).join(" | ")};
 
 export type AsyncEmitBodyMap = {${channelsArray
                     .map(r => {
                         return `
-"${r.fullChannelPath}": ${r.requestBodyTypeString};`;
+${r.fullChannelPath}: ${r.requestBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -436,7 +455,7 @@ export type AsyncEmitBodyMap = {${channelsArray
 export type AsyncEmitResponseMap = {${channelsArray
                     .map(r => {
                         return `
-"${r.fullChannelPath}": ${r.responseBodyTypeString};`;
+${r.fullChannelPath}: ${r.responseBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -474,12 +493,12 @@ export type ApiPost = <T = any, R = AxiosResponse<T>, D = any>(
             } else {
                 content.push(`
 
-export type ApiPostUrl = ${postRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
+export type ApiPostUrl = ${postRoutes.map(r => `${r.fullRoutePath}`).join(" | ")};
 
 export type ApiPostBodyMap = {${postRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
+${r.fullRoutePath}: ${r.requestBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -487,7 +506,7 @@ export type ApiPostBodyMap = {${postRoutes
 export type ApiPostResponseMap = {${postRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
+${r.fullRoutePath}: ${r.responseBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -495,7 +514,7 @@ export type ApiPostResponseMap = {${postRoutes
 export type ApiPostHeadersMap = {${postRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+${r.fullRoutePath}: ${r.requestHeadersTypeString} & {
     [key: string]: string; 
 };`;
                     })
@@ -505,7 +524,7 @@ export type ApiPostHeadersMap = {${postRoutes
 export type ApiPostParamsMap = {${postRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
+${r.fullRoutePath}: ${r.requestParamsTypeString};`;
                     })
                     .join("")}
 };
@@ -558,12 +577,12 @@ export type ApiPut = <T = any, R = AxiosResponse<T>, D = any>(
                 content.push(`
 
 
-export type ApiPutUrl = ${putRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
+export type ApiPutUrl = ${putRoutes.map(r => `${r.fullRoutePath}`).join(" | ")};
 
 export type ApiPutBodyMap = {${putRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
+${r.fullRoutePath}: ${r.requestBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -571,7 +590,7 @@ export type ApiPutBodyMap = {${putRoutes
 export type ApiPutResponseMap = {${putRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
+${r.fullRoutePath}: ${r.responseBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -579,7 +598,7 @@ export type ApiPutResponseMap = {${putRoutes
 export type ApiPutHeadersMap = {${putRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+${r.fullRoutePath}: ${r.requestHeadersTypeString} & {
     [key: string]: string; 
 };`;
                     })
@@ -589,7 +608,7 @@ export type ApiPutHeadersMap = {${putRoutes
 export type ApiPutParamsMap = {${putRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
+${r.fullRoutePath}: ${r.requestParamsTypeString};`;
                     })
                     .join("")}
 };
@@ -632,12 +651,12 @@ export type ApiGet = <T = any, R = AxiosResponse<T>, D = any>(url: string, confi
 
          
 
-export type ApiGetUrl = ${getRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
+export type ApiGetUrl = ${getRoutes.map(r => `${r.fullRoutePath}`).join(" | ")};
 
 export type ApiGetBodyMap = {${getRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
+${r.fullRoutePath}: ${r.requestBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -645,7 +664,7 @@ export type ApiGetBodyMap = {${getRoutes
 export type ApiGetResponseMap = {${getRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
+${r.fullRoutePath}: ${r.responseBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -653,7 +672,7 @@ export type ApiGetResponseMap = {${getRoutes
 export type ApiGetHeadersMap = {${getRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+${r.fullRoutePath}: ${r.requestHeadersTypeString} & {
     [key: string]: string; 
 };`;
                     })
@@ -663,7 +682,7 @@ export type ApiGetHeadersMap = {${getRoutes
 export type ApiGetParamsMap = {${getRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
+${r.fullRoutePath}: ${r.requestParamsTypeString};`;
                     })
                     .join("")}
 };
@@ -703,12 +722,12 @@ export type ApiDelete = <T = any, R = AxiosResponse<T>, D = any>(url: string, co
             } else {
                 content.push(`
          
-export type ApiDeleteUrl = ${deleteRoutes.map(r => `"${r.fullRoutePath}"`).join(" | ")};
+export type ApiDeleteUrl = ${deleteRoutes.map(r => `${r.fullRoutePath}`).join(" | ")};
 
 export type ApiDeleteBodyMap = {${deleteRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestBodyTypeString};`;
+${r.fullRoutePath}: ${r.requestBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -716,7 +735,7 @@ export type ApiDeleteBodyMap = {${deleteRoutes
 export type ApiDeleteResponseMap = {${deleteRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.responseBodyTypeString};`;
+${r.fullRoutePath}: ${r.responseBodyTypeString};`;
                     })
                     .join("")}
 };
@@ -724,7 +743,7 @@ export type ApiDeleteResponseMap = {${deleteRoutes
 export type ApiDeleteHeadersMap = {${deleteRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestHeadersTypeString} & {
+${r.fullRoutePath}: ${r.requestHeadersTypeString} & {
     [key: string]: string; 
 };`;
                     })
@@ -734,7 +753,7 @@ export type ApiDeleteHeadersMap = {${deleteRoutes
 export type ApiDeleteParamsMap = {${deleteRoutes
                     .map(r => {
                         return `
-"${r.fullRoutePath}": ${r.requestParamsTypeString};`;
+${r.fullRoutePath}: ${r.requestParamsTypeString};`;
                     })
                     .join("")}
 };
@@ -784,7 +803,7 @@ program
         fs.writeFileSync(
             apiTypesFilePath,
             `
-import { AxiosRequestConfig, AxiosResponse } from "axios";
+import type { AxiosRequestConfig, AxiosResponse } from "axios";
 
 export type RequestConfig<D> = {
     sinceMins?: number;

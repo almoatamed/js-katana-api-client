@@ -1,6 +1,43 @@
 import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from "axios";
 import io, { ManagerOptions, Socket, SocketOptions } from "socket.io-client";
 
+const catchCb = <T>(cb: () => T): T | null => {
+    try {
+        return cb();
+    } catch {
+        return null;
+    }
+};
+
+const isDev = (): boolean => {
+    return !!(
+        catchCb(() => {
+            //@ts-ignore
+            return import.meta.__DEV__ ?? import.meta.dev;
+        }) ??
+        catchCb(() => {
+            //@ts-ignore
+            return __DEV__;
+        }) ??
+        catchCb(() => {
+            //@ts-ignore
+            return ["dev", "test"].includes(String(process.env.NODE_ENV).toLowerCase());
+        }) ??
+        catchCb(() => {
+            //@ts-ignore
+            return ["dev", "test"].includes(String(process.env.ENV).toLowerCase());
+        }) ??
+        false
+    );
+};
+
+const dev = isDev();
+const log = (...msgs: any) => {
+    if (dev) {
+        console.debug(...msgs);
+    }
+};
+
 export const trimSlashes = (path: string, removeStartingSlash = false, removeEndingSlash = true) => {
     if (path == "/") {
         return path;
@@ -174,6 +211,7 @@ export const createSocketClient = <
         props.autoConnect = true;
     }
 
+
     const createEventFromRoute = (route: string, notScoped: boolean) => {
         let event = notScoped ? route : path.join(props.scope || "", route);
         if (!event.endsWith("/")) {
@@ -297,6 +335,13 @@ export const createSocketClient = <
     let isConnected = false;
 
     const reconnect = () => {
+        log("Connecting", props)
+
+        if (props.channellingPrefix === undefined) {
+            console.warn("channeling prefix is not set using default `/channel`");
+            props.channellingPrefix = "/channel";
+        }
+
         const options = {} as Partial<ManagerOptions & SocketOptions>;
 
         options.auth = props.getToken || props.appHeader ? cb => cb(auth()) : undefined;
@@ -340,7 +385,7 @@ export const createSocketClient = <
         });
 
         socketInstance.on("connectError", error => {
-            console.log("Socket Connection Error", error);
+            console.error("Socket Connection Error", error);
         });
 
         socketInstance.on("disconnect", async () => {
@@ -349,12 +394,13 @@ export const createSocketClient = <
         });
 
         socketInstance.once("connect", async () => {
+            log("Connected socket");
             await Promise.all(onceConnectQueue.splice(0).map(cb => cb()));
         });
 
         socketInstance.on("connect", async () => {
             isConnected = true;
-
+            log("Connected!!");
             await Promise.all(onConnectListeners.map(cb => cb()));
         });
 
@@ -432,7 +478,8 @@ export const createSocketClient = <
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
             const localCache = await storage?.get<any>(key);
             if (localCache?.timestamp) {
-                const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                const timestamp =
+                    typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
                 if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
                     return localCache.response;
                 }
@@ -584,6 +631,7 @@ export const createApiClient = <
         socketProps.appHeader = props.appHeader;
         socketProps.getToken = props.getToken;
         socketProps.noCaching = props.noCaching;
+        log("Updated props for socket", socketProps);
     };
 
     const setSocket = () => {
@@ -619,6 +667,7 @@ export const createApiClient = <
             config.headers["x-app"] = appHeader;
             config.headers["app"] = appHeader;
         }
+        log("final http config", config)
         return config;
     };
     const httpErrorResponseHandler = async (error: any) => {
@@ -644,7 +693,7 @@ export const createApiClient = <
         Api.get = createDispatcherWithCachingNoBody("get") as any;
         return Api;
     };
-    const Api: ApiInterface<Post, Put, Delete, Get> = createHttpInstance();
+    const Api: ApiInterface<Post, Put, Delete, Get> = {} as any;
     const reloadHttpInstance = () => {
         Object.assign(Api, createHttpInstance());
     };
@@ -733,11 +782,12 @@ export const createApiClient = <
             __headers: options.headers,
         };
 
-        const responseBody: any = await socket.performAsyncEmit(url, emitBody, {
+        const responseBody: any = await socket.performAsyncEmit(`---%http%---/${url}`, emitBody, {
             timeout: httpRequestTimeoutValue,
             notScoped: details.options.notScoped,
             quiet: details.options.quiet,
         });
+        log("Socket dispatch response body", responseBody);
 
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0) {
             await attemptToSaveToStorage(key, responseBody);
@@ -748,11 +798,12 @@ export const createApiClient = <
 
     const dispatchRequestViaHttp = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { url, options, method, key } = details;
+        log("requesting via http", details)
         const apiMethod = (Api as any)?.[`_${method}`];
-        const response = details.method === "post" || details.method === "put"
-            ? await apiMethod?.(url, details.body, options)
-            : await apiMethod?.(url, options);
-        
+        const response =
+            details.method === "post" || details.method === "put"
+                ? await apiMethod?.(url, details.body, options)
+                : await apiMethod?.(url, options);
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && props.storage) {
             await attemptToSaveToStorage(key, response.data);
         }
@@ -761,16 +812,18 @@ export const createApiClient = <
 
     const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { options, url } = details;
-
         if (isSocketEmitPossible<D>(url, options)) {
             try {
                 return await dispatchRequestViaSocket<D, R>(details);
             } catch (error: any) {
-                console.log("socket dispatch error", error);
                 const statusCode = error?.status || error?.statusCode;
                 if (isNumber(statusCode) && statusCode >= 400 && statusCode < 500) {
-                    console.log("Event Error", error);
-                    throw error;
+                    const e = extractApiError(error);
+                    if (statusCode == 404 && e.errors[0]?.error == "event not found") {
+                    } else {
+                        console.error("Event Error", error);
+                        throw error;
+                    }
                 }
             }
         }
@@ -814,7 +867,8 @@ export const createApiClient = <
             if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
                 const localCache = await props.storage?.get<any>(key);
                 if (localCache?.timestamp) {
-                    const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    const timestamp =
+                        typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
                     if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
                         return localCache.response;
                     }
@@ -861,7 +915,8 @@ export const createApiClient = <
             if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
                 const localCache = await props.storage?.get<any>(key);
                 if (localCache?.timestamp) {
-                    const timestamp = typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    const timestamp =
+                        typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
                     if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
                         return localCache.response;
                     }
