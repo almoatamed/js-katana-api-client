@@ -43,9 +43,9 @@
  ### 1. Install
 
  ```bash
- npm install kt-client
+ npm install js-kt-api-client
  # or
- bun add kt-client
+ bun add js-kt-api-client
  ```
 
 ### 2. (Optional) Configure your project
