@@ -3,4 +3,5 @@ import type { ApiDelete, ApiGet, ApiPost, ApiPut, AsyncEmit, OnEvent } from "../
 export * from "./api-client/index.js";
 
 const create = createApiClient<ApiPost, ApiPut, ApiDelete, ApiGet, AsyncEmit, OnEvent>;
+
 export default create;

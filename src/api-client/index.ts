@@ -610,6 +610,12 @@ export const createApiClient = <
 >(
     props: ApiProps
 ) => {
+    if(props.channelling === undefined){
+        props.channelling = {
+            useChannelling: true
+        }
+    }
+
     const socketProps: SocketProps = {
         baseUrl: props.baseUrl,
         autoConnect: false,

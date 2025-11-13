@@ -1,5 +1,5 @@
 {
-    "name": "js-kt-client",
+    "name": "kt-client",
     "version": "2.18.1",
     "description": "Js-katana Api client",
     "keywords": [
@@ -31,7 +31,7 @@
     "author": "S. Elmotamed",
     "type": "module",
     "bin": {
-        "kt-api": "./dist/client-api-types-loader/index.js"
+        "kt-client": "./dist/client-api-types-loader/index.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
