@@ -755,6 +755,7 @@ export const createApiClient = <
     const modifySocketDispatch = <D>(details: RequestDispatchDetails<D>) => {
         const options = { ...details.options };
         const headers = options.headers || {};
+        details.url = path.join(props.httpPrefix || "", details.options.notScoped ? "" : props.scope || "");
 
         const token = props.getToken?.();
         if (token) {
@@ -776,7 +777,6 @@ export const createApiClient = <
         }
 
         const detailsWithHeaders = modifySocketDispatch(details);
-
         const body =
             detailsWithHeaders.method === "post" || detailsWithHeaders.method === "put" ? detailsWithHeaders.body : {};
 
@@ -788,7 +788,7 @@ export const createApiClient = <
             __headers: options.headers,
         };
 
-        const responseBody: any = await socket.performAsyncEmit(`---%http%---/${url}`, emitBody, {
+        const responseBody: any = await socket.performAsyncEmit(path.join(`---%http%---`, `${url}`), emitBody, {
             timeout: httpRequestTimeoutValue,
             notScoped: details.options.notScoped,
             quiet: details.options.quiet,
@@ -818,10 +818,12 @@ export const createApiClient = <
 
     const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { options, url } = details;
-        if (isSocketEmitPossible<D>(url, (details as any)?.body || null, options)) {
+        const dispatchViaSocket = isSocketEmitPossible<D>(url, (details as any)?.body || null, options);
+        if (dispatchViaSocket) {
             try {
                 return await dispatchRequestViaSocket<D, R>(details);
             } catch (error: any) {
+                log(error);
                 const statusCode = error?.status || error?.statusCode;
                 if (isNumber(statusCode) && statusCode >= 400 && statusCode < 500) {
                     const e = extractApiError(error);
