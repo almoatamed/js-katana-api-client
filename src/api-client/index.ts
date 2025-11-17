@@ -716,9 +716,10 @@ export const createApiClient = <
         reloadSocket();
     };
 
-    const isSocketEmitPossible = <D>(url: string, options: RequestConfig<D>) => {
+    const isSocketEmitPossible = <D>(url: string, body: any, options: RequestConfig<D>) => {
         return (
             props.httpOnly?.() !== true &&
+            !(body instanceof FormData) &&
             socket?.isConnected() === true &&
             (!options?.requestVia || options.requestVia.includes("socket"))
         );
@@ -818,7 +819,7 @@ export const createApiClient = <
 
     const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { options, url } = details;
-        if (isSocketEmitPossible<D>(url, options)) {
+        if (isSocketEmitPossible<D>(url, details.method == "post" || details.method == "put" ? details.body: null, options)) {
             try {
                 return await dispatchRequestViaSocket<D, R>(details);
             } catch (error: any) {

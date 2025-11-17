@@ -2,6 +2,7 @@
 logs
 apiTypes/
 *.log
+example
 npm-debug.log*
 yarn-debug.log*
 commander
