@@ -211,7 +211,6 @@ export const createSocketClient = <
         props.autoConnect = true;
     }
 
-
     const createEventFromRoute = (route: string, notScoped: boolean) => {
         let event = notScoped ? route : path.join(props.scope || "", route);
         if (!event.endsWith("/")) {
@@ -335,7 +334,7 @@ export const createSocketClient = <
     let isConnected = false;
 
     const reconnect = () => {
-        log("Connecting", props)
+        log("Connecting", props);
 
         if (props.channellingPrefix === undefined) {
             console.warn("channeling prefix is not set using default `/channel`");
@@ -610,10 +609,10 @@ export const createApiClient = <
 >(
     props: ApiProps
 ) => {
-    if(props.channelling === undefined){
+    if (props.channelling === undefined) {
         props.channelling = {
-            useChannelling: true
-        }
+            useChannelling: true,
+        };
     }
 
     const socketProps: SocketProps = {
@@ -673,7 +672,7 @@ export const createApiClient = <
             config.headers["x-app"] = appHeader;
             config.headers["app"] = appHeader;
         }
-        log("final http config", config)
+        log("final http config", config);
         return config;
     };
     const httpErrorResponseHandler = async (error: any) => {
@@ -805,7 +804,7 @@ export const createApiClient = <
 
     const dispatchRequestViaHttp = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { url, options, method, key } = details;
-        log("requesting via http", details)
+        log("requesting via http", details);
         const apiMethod = (Api as any)?.[`_${method}`];
         const response =
             details.method === "post" || details.method === "put"
@@ -819,7 +818,7 @@ export const createApiClient = <
 
     const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { options, url } = details;
-        if (isSocketEmitPossible<D>(url, details.method == "post" || details.method == "put" ? details.body: null, options)) {
+        if (isSocketEmitPossible<D>(url, (details as any)?.body || null, options)) {
             try {
                 return await dispatchRequestViaSocket<D, R>(details);
             } catch (error: any) {
