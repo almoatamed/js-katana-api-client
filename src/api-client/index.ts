@@ -755,7 +755,7 @@ export const createApiClient = <
     const modifySocketDispatch = <D>(details: RequestDispatchDetails<D>) => {
         const options = { ...details.options };
         const headers = options.headers || {};
-        details.url = path.join(props.httpPrefix || "", details.options.notScoped ? "" : props.scope || "");
+        details.url = path.join(props.httpPrefix || "", details.options.notScoped ? "" : props.scope || "", details.url);
 
         const token = props.getToken?.();
         if (token) {
