@@ -1,26 +1,33 @@
 
-import type { AxiosRequestConfig, AxiosResponse } from "axios";
+
+export type Response<T> = {
+    data: T 
+}
 
 export type RequestConfig<D> = {
     sinceMins?: number;
     now?: boolean;
     requestVia?: ("http"|"socket")[]
     quiet?: boolean;
-} & AxiosRequestConfig<D>;
+} & {
+    data?: D; 
+    params?: any; 
+    headers?: Record<string, string>;
+};
 
-export type ApiPost = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPost = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
 ) => Promise<R>;
 
-export type ApiPut = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPut = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
 ) => Promise<R>;
-export type ApiDelete = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
-export type ApiGet = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
+export type ApiDelete = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
+export type ApiGet = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
 
 export type AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmitOptions) => Promise<T>;
 
