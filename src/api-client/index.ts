@@ -1228,22 +1228,26 @@ export const createApiClientFetch = <
             });
 
             let data: any;
-            switch (response.headers.get("content-type")) {
-                case "application/json":
-                    data = await response.json();
-                    break;
-                case "text/plain":
-                    data = await response.text();
-                    break;
-                case "multipart/form-data":
-                    data = await response.formData();
-                    break;
-                case "application/octet-stream":
-                    data = await response.arrayBuffer();
-                    break;
-                default:
-                    data = await response.arrayBuffer();
-                    break;
+            const ct = response.headers.get("content-type");
+            if (
+                ct.includes("application/json") ||
+                ct.includes("text/json") ||
+                ct.includes("application/problem+json") ||
+                ct.includes("application/vnd.api+json")
+            ) {
+                data = await response.json();
+            } else if (ct.includes("text/")) {
+                data = await response.text();
+            } else if (ct.includes("multipart/form-data")) {
+                data = await response.formData();
+            } else if (
+                ct.includes("application/octet-stream") ||
+                ct.includes("application/pdf") ||
+                ct.includes("image/")
+            ) {
+                data = await response.arrayBuffer();
+            } else {
+                data = await response.arrayBuffer();
             }
 
             if (response.status >= 400) {
