@@ -263,7 +263,6 @@ you can drop the scope if you do not want scoped access
 
             const content = [
                 `
-import type { AxiosRequestConfig, AxiosResponse } from "axios";
 export type Merge<T, U> = T & Omit<U, keyof T>;
 
 export type AsyncEmitOptions = {
@@ -274,12 +273,23 @@ export type AsyncEmitOptions = {
     notScoped?: boolean;
 };
 
+
+
+
 export type RequestConfig<D> = {
     sinceMins?: number;
     now?: boolean;
     requestVia?: ("http"|"socket")[]
     quiet?: boolean;
-} & AxiosRequestConfig<D>;
+} & {
+    data?: D;
+    params?: any; 
+    headers?: Record<string, string>;
+};
+
+export type Response<T> = {
+    data: T;
+}
 
 
 type OmitFunctions<T> = T;
@@ -317,14 +327,17 @@ type OmitFunctions<T> = T;
                     }
                 }
                 r.fullRoutePath = trimSlashes(r.fullRoutePath || "")?.slice(trimSlashes(scope).length);
+                if(r.fullRoutePath == ""){
+                    r.fullRoutePath = "/"
+                }
                 r.fullRoutePath = r.fullRoutePath.replace(/:\b[_\-a-zA-Z0-9]+?\b|\[\b[_\-a-zA-Z0-9]+?\b\]/g, _match => {
-                    console.log("replacing", _match,"in", r.fullRoutePath, "with parma string");
+                    console.log("replacing", _match, "in", r.fullRoutePath, "with parma string");
                     return "${string}";
                 });
                 if (r.fullRoutePath.includes("${string}")) {
                     r.fullRoutePath = `[key: \`${r.fullRoutePath}\`]`;
-                }else {
-                    r.fullRoutePath = `"${r.fullRoutePath}"`
+                } else {
+                    r.fullRoutePath = `"${r.fullRoutePath}"`;
                 }
             }
 
@@ -337,10 +350,13 @@ type OmitFunctions<T> = T;
                 }
                 c.fullChannelPath = trimSlashes(c.fullChannelPath || "")?.slice(trimSlashes(scope).length);
                 c.fullChannelPath = trimSlashes(c.fullChannelPath || "")?.slice(trimSlashes(scope).length);
-                c.fullChannelPath = c.fullChannelPath.replace(/:\b[_\-a-zA-Z0-9]+?\b|\[\b[_\-a-zA-Z0-9]+?\b\]/g, _match => {
-                    console.log("replacing", _match, "in", c.fullChannelPath, "with parma string");
-                    return "${string}";
-                });
+                c.fullChannelPath = c.fullChannelPath.replace(
+                    /:\b[_\-a-zA-Z0-9]+?\b|\[\b[_\-a-zA-Z0-9]+?\b\]/g,
+                    _match => {
+                        console.log("replacing", _match, "in", c.fullChannelPath, "with parma string");
+                        return "${string}";
+                    }
+                );
                 if (c.fullChannelPath.includes("${string}")) {
                     c.fullChannelPath = `[key: \`${c.fullChannelPath}\`]`;
                 } else {
@@ -483,7 +499,7 @@ export type AsyncEmit = <U extends AsyncEmitEvents | string>(
             if (!postRoutes.length) {
                 content.push(`
 
-export type ApiPost = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPost = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
@@ -550,7 +566,7 @@ export type ApiPost = <U extends ApiPostUrl | string>(
         }
         params?: ApiPostParams<U>; 
     }, RequestConfig<ApiPostBody<U>>>
-) => Promise<AxiosResponse<ApiPostResponse<U>>>;
+) => Promise<Response<ApiPostResponse<U>>>;
 
 
             `);
@@ -566,7 +582,7 @@ export type ApiPost = <U extends ApiPostUrl | string>(
             if (!putRoutes.length) {
                 content.push(`
 
-export type ApiPut = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPut = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
@@ -628,7 +644,7 @@ export type ApiPut = <U extends ApiPutUrl | string>(
         ${putRoutes.some(r => r.requestHeadersTypeString != "OmitFunctions<any>") ? "headers?: ApiPutHeaders<U>; " : ""}
         params?: ApiPutParams<U>; 
     }, RequestConfig<ApiPutBody<U>>>
-) => Promise<AxiosResponse<ApiPutResponse<U>>>;
+) => Promise<Response<ApiPutResponse<U>>>;
 
             `);
             }
@@ -643,7 +659,7 @@ export type ApiPut = <U extends ApiPutUrl | string>(
             if (!getRoutes.length) {
                 content.push(`
 
-export type ApiGet = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;;
+export type ApiGet = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;;
 
             `);
             } else {
@@ -701,7 +717,7 @@ export type ApiGet = <U extends ApiGetUrl | string>(
         ${getRoutes.some(r => r.requestHeadersTypeString != "OmitFunctions<any>") ? "headers?: ApiGetHeaders<U>; " : ""}
         params?: ApiGetParams<U>; 
     }, RequestConfig<ApiGetBody<U>>>
-) => Promise<AxiosResponse<ApiGetResponse<U>>>;
+) => Promise<Response<ApiGetResponse<U>>>;
 
             `);
             }
@@ -716,7 +732,7 @@ export type ApiGet = <U extends ApiGetUrl | string>(
             if (!deleteRoutes.length) {
                 content.push(`
 
-export type ApiDelete = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;;
+export type ApiDelete = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;;
 
             `);
             } else {
@@ -776,7 +792,7 @@ export type ApiDelete = <U extends ApiDeleteUrl | string>(
         }
         params?: ApiDeleteParams<U>; 
     }, RequestConfig<ApiDeleteBody<U>>>
-) => Promise<AxiosResponse<ApiDeleteResponse<U>>>;
+) => Promise<Response<ApiDeleteResponse<U>>>;
 
             `);
             }
@@ -803,28 +819,35 @@ program
         fs.writeFileSync(
             apiTypesFilePath,
             `
-import type { AxiosRequestConfig, AxiosResponse } from "axios";
+
+export type Response<T> = {
+    data: T 
+}
 
 export type RequestConfig<D> = {
     sinceMins?: number;
     now?: boolean;
     requestVia?: ("http"|"socket")[]
     quiet?: boolean;
-} & AxiosRequestConfig<D>;
+} & {
+    data?: D; 
+    params?: any; 
+    headers?: Record<string, string>;
+};
 
-export type ApiPost = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPost = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
 ) => Promise<R>;
 
-export type ApiPut = <T = any, R = AxiosResponse<T>, D = any>(
+export type ApiPut = <T = any, R = Response<T>, D = any>(
     url: string,
     data?: D,
     config?: AsyncEmitOptions & RequestConfig<D>
 ) => Promise<R>;
-export type ApiDelete = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
-export type ApiGet = <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
+export type ApiDelete = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
+export type ApiGet = <T = any, R = Response<T>, D = any>(url: string, config?: AsyncEmitOptions & RequestConfig<D>) => Promise<R>;
 
 export type AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmitOptions) => Promise<T>;
 
