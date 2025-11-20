@@ -1,6 +1,6 @@
-import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import io, { ManagerOptions, Socket, SocketOptions } from "socket.io-client";
-
+import qs from "qs";
 const catchCb = <T>(cb: () => T): T | null => {
     try {
         return cb();
@@ -514,12 +514,20 @@ export const createSocketClient = <
 
 export type RequestConfig<D> = {
     requestVia?: ("http" | "socket")[];
-} & AsyncEmitOptions &
-    AxiosRequestConfig<D>;
+} & AsyncEmitOptions & {
+        data?: D;
+        params?: any;
+        headers?: Record<string, string>;
+    };
 
-type Merge<T, U> = T & Omit<U, keyof T>;
+export type Merge<T, U> = T & Omit<U, keyof T>;
 
-export type ApiInterface<Post = DefaultApiPost, Put = DefaultApiPut, Delete = DefaultApiDelete, Get = DefaultApiGet> = {
+export type AxiosApiInterface<
+    Post = DefaultApiPost,
+    Put = DefaultApiPut,
+    Delete = DefaultApiDelete,
+    Get = DefaultApiGet
+> = {
     _post: Post;
     _put: Put;
     _delete: Delete;
@@ -535,6 +543,18 @@ export type ApiInterface<Post = DefaultApiPost, Put = DefaultApiPut, Delete = De
     AxiosInstance
 >;
 
+export type FetchApiInterface<
+    Post = DefaultApiPost,
+    Put = DefaultApiPut,
+    Delete = DefaultApiDelete,
+    Get = DefaultApiGet
+> = {
+    post: Post;
+    put: Put;
+    delete: Delete;
+    get: Get;
+};
+
 const passthroughFn = <T>(x: T) => x;
 
 type HttpPrefix = string | undefined;
@@ -542,6 +562,7 @@ type ApiScope = string | undefined;
 type onUnauthorized = () => void | Promise<void>;
 
 export type ApiProps = {
+    adapter?: "axios" | "fetch";
     getToken?: GetToken;
     httpRequestTimeout?: number;
     appHeader?: AppHeader;
@@ -599,7 +620,7 @@ type DefaultOnEvent = (
     cb: (body: any, cb?: (body?: any) => Promise<void>) => any | Promise<any>
 ) => Promise<() => void>;
 
-export const createApiClient = <
+export const createApiClientAxios = <
     Post = DefaultApiPost,
     Put = DefaultApiPut,
     Delete = DefaultApiDelete,
@@ -675,6 +696,7 @@ export const createApiClient = <
         log("final http config", config);
         return config;
     };
+
     const httpErrorResponseHandler = async (error: any) => {
         const response = error?.response;
         if (response && response.status === 401) {
@@ -682,7 +704,8 @@ export const createApiClient = <
         }
         throw error;
     };
-    const createHttpInstance = (): ApiInterface<Post, Put, Delete, Get> => {
+
+    const createHttpInstance = (): AxiosApiInterface<Post, Put, Delete, Get> => {
         const Api: any = axios.create({
             baseURL: props.baseUrl,
         });
@@ -698,7 +721,9 @@ export const createApiClient = <
         Api.get = createDispatcherWithCachingNoBody("get") as any;
         return Api;
     };
-    const Api: ApiInterface<Post, Put, Delete, Get> = {} as any;
+
+    const Api: AxiosApiInterface<Post, Put, Delete, Get> = {} as any;
+
     const reloadHttpInstance = () => {
         Object.assign(Api, createHttpInstance());
     };
@@ -755,7 +780,11 @@ export const createApiClient = <
     const modifySocketDispatch = <D>(details: RequestDispatchDetails<D>) => {
         const options = { ...details.options };
         const headers = options.headers || {};
-        details.url = path.join(props.httpPrefix || "", details.options.notScoped ? "" : props.scope || "", details.url);
+        details.url = path.join(
+            props.httpPrefix || "",
+            details.options.notScoped ? "" : props.scope || "",
+            details.url
+        );
 
         const token = props.getToken?.();
         if (token) {
@@ -804,15 +833,20 @@ export const createApiClient = <
 
     const dispatchRequestViaHttp = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
         const { url, options, method, key } = details;
+
         log("requesting via http", details);
+
         const apiMethod = (Api as any)?.[`_${method}`];
+
         const response =
             details.method === "post" || details.method === "put"
                 ? await apiMethod?.(url, details.body, options)
                 : await apiMethod?.(url, options);
+
         if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && props.storage) {
             await attemptToSaveToStorage(key, response.data);
         }
+
         return { data: response.data } as R;
     };
 
@@ -953,4 +987,451 @@ export const createApiClient = <
     };
 
     return state;
+};
+
+export const createApiClientFetch = <
+    Post = DefaultApiPost,
+    Put = DefaultApiPut,
+    Delete = DefaultApiDelete,
+    Get = DefaultApiGet,
+    AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmitOptions) => Promise<T>,
+    OnEvent = DefaultOnEvent
+>(
+    props: ApiProps
+) => {
+    if (props.channelling === undefined) {
+        props.channelling = {
+            useChannelling: true,
+        };
+    }
+
+    const socketProps: SocketProps = {
+        baseUrl: props.baseUrl,
+        autoConnect: false,
+    };
+    const socket: ReturnType<typeof createSocketClient<AsyncEmit, OnEvent>> = createSocketClient(socketProps);
+
+    const updateSocketConfig = () => {
+        if (props.channelling) {
+            for (const key in props.channelling) {
+                (socketProps as any)[key] = (props as any).channelling[key];
+            }
+            if (props.channelling.autoConnect === undefined) {
+                socketProps.autoConnect = true;
+            }
+        }
+        socketProps.scope = props.scope;
+        socketProps.storage = props.storage;
+        socketProps.baseUrl = props.baseUrl;
+        socketProps.appHeader = props.appHeader;
+        socketProps.getToken = props.getToken;
+        socketProps.noCaching = props.noCaching;
+        log("Updated props for socket", socketProps);
+    };
+
+    const setSocket = () => {
+        updateSocketConfig();
+        socket.reconnect();
+    };
+
+    const removeSocket = () => {
+        socket.socket()?.destroyCurrentInstance();
+    };
+
+    const reloadSocket = () => {
+        if (props.channelling?.useChannelling) {
+            setSocket();
+        } else {
+            removeSocket();
+        }
+    };
+
+    const httpRequestTimeoutValue = props.httpRequestTimeout ?? 120e3;
+
+    const modifyHttpRequestConfig = (details: RequestDispatchDetails<any>) => {
+        const config = details.options;
+        config.timeout = httpRequestTimeoutValue;
+
+        details.url = path.join(
+            props.baseUrl,
+            props.httpPrefix || "",
+            config.notScoped ? "" : props.scope || "",
+            details.url
+        );
+
+        const token = props.getToken?.();
+        if (token) {
+            config.headers["Authorization"] = token;
+        }
+
+        const appHeader = props.appHeader;
+        if (appHeader) {
+            config.headers["x-app"] = appHeader;
+            config.headers["app"] = appHeader;
+        }
+        log("final http config", config);
+        return details;
+    };
+
+    const httpErrorResponseHandler = async (error: any) => {
+        const response = error?.response;
+        if (response && response.status === 401) {
+            await props.onUnauthorized?.();
+        }
+        throw error;
+    };
+
+    const createHttpInstance = (): FetchApiInterface<Post, Put, Delete, Get> => {
+        const Api: any = {};
+        Api.put = createDispatcherWithCachingWithBody("put") as any;
+        Api.post = createDispatcherWithCachingWithBody("post") as any;
+        Api.delete = createDispatcherWithCachingNoBody("delete") as any;
+        Api.get = createDispatcherWithCachingNoBody("get") as any;
+        return Api;
+    };
+
+    const Api: FetchApiInterface<Post, Put, Delete, Get> = {} as any;
+
+    const reloadHttpInstance = () => {
+        Object.assign(Api, createHttpInstance());
+    };
+
+    const reloadConfig = (updatedProps?: Partial<ApiProps>) => {
+        if (updatedProps) {
+            for (const key in updatedProps) {
+                if (updatedProps[key] !== undefined) {
+                    (props as any)[key] = (updatedProps as any)[key];
+                }
+            }
+        }
+        reloadHttpInstance();
+        reloadSocket();
+    };
+
+    const isSocketEmitPossible = <D>(url: string, body: any, options: RequestConfig<D>) => {
+        return (
+            props.httpOnly?.() !== true &&
+            !(body instanceof FormData) &&
+            socket?.isConnected() === true &&
+            (!options?.requestVia || options.requestVia.includes("socket"))
+        );
+    };
+
+    const attemptToSaveToStorage = async <T>(key: string, value: T) => {
+        if (!props.storage) {
+            return;
+        }
+        const storage = props.storage;
+        try {
+            await storage.save(key, {
+                timestamp: Date.now(),
+                response: {
+                    data: value,
+                },
+            });
+        } catch (error) {
+            console.error(error);
+            storage.clear();
+            await storage.save(key, {
+                timestamp: Date.now(),
+                response: {
+                    data: value,
+                },
+            });
+        }
+    };
+
+    type RequestDispatchDetails<D> =
+        | { method: "get" | "delete"; options: RequestConfig<D>; key: string; url: string }
+        | { method: "post" | "put"; options: RequestConfig<D>; key: string; url: string; body: D };
+
+    const modifySocketDispatch = <D>(details: RequestDispatchDetails<D>) => {
+        const options = { ...details.options };
+        const headers = options.headers || {};
+        details.url = path.join(
+            props.httpPrefix || "",
+            details.options.notScoped ? "" : props.scope || "",
+            details.url
+        );
+
+        const token = props.getToken?.();
+        if (token) {
+            headers.authorization = token;
+        }
+        const appHeader = props.appHeader;
+        if (appHeader) {
+            headers["x-app"] = appHeader;
+            headers["app"] = appHeader;
+        }
+
+        options.headers = headers;
+        return { ...details, options };
+    };
+
+    const dispatchRequestViaSocket = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
+        if (!props.channelling || !socket?.isConnected()) {
+            throw new Error("Socket is not connected");
+        }
+
+        const detailsWithHeaders = modifySocketDispatch(details);
+
+        const body =
+            (detailsWithHeaders.method === "post" || detailsWithHeaders.method === "put"
+                ? detailsWithHeaders.body
+                : detailsWithHeaders.options.data) || {};
+
+        const { options, key, url } = detailsWithHeaders;
+
+        const emitBody = {
+            ...body,
+            __query: options.params,
+            __headers: options.headers,
+        };
+
+        const responseBody: any = await socket.performAsyncEmit(path.join(`---%http%---`, `${url}`), emitBody, {
+            timeout: httpRequestTimeoutValue,
+            notScoped: details.options.notScoped,
+            quiet: details.options.quiet,
+        });
+        log("Socket dispatch response body", responseBody);
+
+        if (typeof options?.sinceMins == "number" && options?.sinceMins > 0) {
+            await attemptToSaveToStorage(key, responseBody);
+        }
+
+        return { data: responseBody } as R;
+    };
+
+    const dispatchRequestViaHttp = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
+        try {
+            const detailsWithHeaders = modifyHttpRequestConfig(details);
+
+            details = detailsWithHeaders;
+
+            const body =
+                (detailsWithHeaders.method === "post" || detailsWithHeaders.method === "put"
+                    ? detailsWithHeaders.body
+                    : detailsWithHeaders.options.data) || null;
+
+            const { url, options, method, key } = detailsWithHeaders;
+
+            log("requesting via http", detailsWithHeaders);
+            let urlWithQuery = url;
+            if (options.params) {
+                urlWithQuery = `${url}?${qs.stringify(options.params)}`;
+            }
+
+            const response = await fetch(urlWithQuery, {
+                body: body ? JSON.stringify(body) : null,
+                headers: new Headers(options.headers),
+                method: method,
+            });
+
+            let data: any;
+            switch (response.headers.get("content-type")) {
+                case "application/json":
+                    data = await response.json();
+                    break;
+                case "text/plain":
+                    data = await response.text();
+                    break;
+                case "multipart/form-data":
+                    data = await response.formData();
+                    break;
+                case "application/octet-stream":
+                    data = await response.arrayBuffer();
+                    break;
+                default:
+                    data = await response.arrayBuffer();
+                    break;
+            }
+
+            if (response.status >= 400) {
+                throw {
+                    response: {
+                        data: data,
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers,
+                        url: response.url,
+                    },
+                    error: new Error(`Request failed with status ${response.status}: ${response.statusText}`),
+                };
+            }
+
+            if (
+                typeof options?.sinceMins == "number" &&
+                options?.sinceMins > 0 &&
+                props.storage &&
+                (typeof data == "string" || !(data instanceof ArrayBuffer))
+            ) {
+                await attemptToSaveToStorage(key, data);
+            }
+            return { data: data } as R;
+        } catch (error) {
+            httpErrorResponseHandler(error);
+        }
+    };
+
+    const dispatchRequest = async <D, R>(details: RequestDispatchDetails<D>): Promise<R> => {
+        const { options, url } = details;
+        const dispatchViaSocket = isSocketEmitPossible<D>(url, (details as any)?.body || null, options);
+        if (dispatchViaSocket) {
+            try {
+                return await dispatchRequestViaSocket<D, R>(details);
+            } catch (error: any) {
+                log(error);
+                const statusCode = error?.status || error?.statusCode;
+                if (isNumber(statusCode) && statusCode >= 400 && statusCode < 500) {
+                    const e = extractApiError(error);
+                    if (statusCode == 404 && e.errors[0]?.error == "event not found") {
+                    } else {
+                        console.error("Event Error", error);
+                        throw error;
+                    }
+                }
+            }
+        }
+        return await dispatchRequestViaHttp<D, R>(details);
+    };
+
+    const createDispatcherWithCachingWithBody = (method: "post" | "put") =>
+        async function <T = any, D = any>(
+            url: string,
+            body: D,
+            options: RequestConfig<D> = { sinceMins: 0 }
+        ): Promise<{
+            data: T;
+        }> {
+            type R = {
+                data: T;
+            };
+
+            const noCaching = props.noCaching?.() === true;
+            const requestDetails = {
+                method,
+                body,
+                options,
+                url,
+            } as const;
+
+            if (noCaching) {
+                return await dispatchRequest<D, R>({
+                    ...requestDetails,
+                    key: "",
+                });
+            }
+
+            const matchBody = {
+                url,
+                body,
+                query: options.params,
+            };
+            const key = JSON.stringify(matchBody);
+
+            if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
+                const localCache = await props.storage?.get<any>(key);
+                if (localCache?.timestamp) {
+                    const timestamp =
+                        typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
+                        return localCache.response;
+                    }
+                }
+            }
+
+            return await dispatchRequest<D, R>({
+                ...requestDetails,
+                key,
+            });
+        };
+
+    const createDispatcherWithCachingNoBody = (method: "get" | "delete") =>
+        async function <T = any, D = any>(
+            url: string,
+            options: RequestConfig<D> = { sinceMins: 0 }
+        ): Promise<{
+            data: T;
+        }> {
+            type R = {
+                data: T;
+            };
+
+            const noCaching = props.noCaching?.() === true;
+            const requestDetails = {
+                method,
+                options,
+                url,
+            } as const;
+
+            if (noCaching) {
+                return await dispatchRequest<D, R>({
+                    ...requestDetails,
+                    key: "",
+                });
+            }
+
+            const matchBody = {
+                url,
+                query: options.params,
+            };
+            const key = JSON.stringify(matchBody);
+
+            if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && !options?.now) {
+                const localCache = await props.storage?.get<any>(key);
+                if (localCache?.timestamp) {
+                    const timestamp =
+                        typeof localCache.timestamp === "number" ? localCache.timestamp : Number(localCache.timestamp);
+                    if ((Date.now() - timestamp) / 60e3 < options.sinceMins) {
+                        return localCache.response;
+                    }
+                }
+            }
+
+            return await dispatchRequest<D, R>({
+                ...requestDetails,
+                key,
+            });
+        };
+
+    reloadConfig();
+
+    const state = {
+        close: () => {
+            try {
+                socket.socket()?.destroyCurrentInstance();
+            } catch {}
+        },
+        api: Api,
+        socket: socket,
+        reloadConfig,
+        reloadHttpInstance,
+        reloadSocket,
+    };
+
+    return state;
+};
+
+export const createApiClient = <
+    Adapter extends "fetch" | "axios",
+    Post = DefaultApiPost,
+    Put = DefaultApiPut,
+    Delete = DefaultApiDelete,
+    Get = DefaultApiGet,
+    AsyncEmit = <T = any>(event: string, body?: any, options?: AsyncEmitOptions) => Promise<T>,
+    OnEvent = DefaultOnEvent
+>(
+    apiProps: Merge<
+        {
+            adapter?: Adapter;
+        },
+        ApiProps
+    >
+): Adapter extends "axios"
+    ? ReturnType<typeof createApiClientAxios<Post, Put, Delete, Get, AsyncEmit, OnEvent>>
+    : ReturnType<typeof createApiClientFetch<Post, Put, Delete, Get, AsyncEmit, OnEvent>> => {
+    if (apiProps.adapter === undefined || apiProps.adapter === "fetch") {
+        return createApiClientFetch<Post, Put, Delete, Get, AsyncEmit, OnEvent>(apiProps) as any;
+    }
+    return createApiClientAxios<Post, Put, Delete, Get, AsyncEmit, OnEvent>(apiProps) as any;
 };
