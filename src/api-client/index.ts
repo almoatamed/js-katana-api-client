@@ -514,6 +514,7 @@ export const createSocketClient = <
 
 export type RequestConfig<D> = {
     requestVia?: ("http" | "socket")[];
+    stream?: boolean;
 } & AsyncEmitOptions & {
         data?: D;
         params?: any;
@@ -744,6 +745,7 @@ export const createApiClientAxios = <
         return (
             props.httpOnly?.() !== true &&
             !(body instanceof FormData) &&
+            !options.stream &&
             socket?.isConnected() === true &&
             (!options?.requestVia || options.requestVia.includes("socket"))
         );
@@ -840,10 +842,16 @@ export const createApiClientAxios = <
 
         const response =
             details.method === "post" || details.method === "put"
-                ? await apiMethod?.(url, details.body, options)
-                : await apiMethod?.(url, options);
+                ? await (apiMethod as AxiosInstance["post"])?.(url, details.body, {
+                      ...options,
+                      responseType: options.stream ? "stream" : undefined,
+                  })
+                : await (apiMethod as AxiosInstance["get"])?.(url, {
+                      ...options,
+                      responseType: options.stream ? "stream" : undefined,
+                  });
 
-        if (typeof options?.sinceMins == "number" && options?.sinceMins > 0 && props.storage) {
+        if (!options.stream && typeof options?.sinceMins == "number" && options?.sinceMins > 0 && props.storage) {
             await attemptToSaveToStorage(key, response.data);
         }
 
@@ -1111,6 +1119,7 @@ export const createApiClientFetch = <
     const isSocketEmitPossible = <D>(url: string, body: any, options: RequestConfig<D>) => {
         return (
             props.httpOnly?.() !== true &&
+            !options.stream &&
             !(body instanceof FormData) &&
             socket?.isConnected() === true &&
             (!options?.requestVia || options.requestVia.includes("socket"))
@@ -1229,6 +1238,13 @@ export const createApiClientFetch = <
 
             let data: any;
             const ct = response.headers.get("content-type");
+
+            if (response.status < 400 && options.stream) {
+                return {
+                    data: response.body,
+                } as R;
+            }
+
             if (
                 ct.includes("application/json") ||
                 ct.includes("text/json") ||

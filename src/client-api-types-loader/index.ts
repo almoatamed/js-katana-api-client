@@ -281,6 +281,7 @@ export type RequestConfig<D> = {
     now?: boolean;
     requestVia?: ("http"|"socket")[]
     quiet?: boolean;
+    stream?: boolean;
 } & {
     data?: D;
     params?: any; 
@@ -829,6 +830,7 @@ export type RequestConfig<D> = {
     now?: boolean;
     requestVia?: ("http"|"socket")[]
     quiet?: boolean;
+    stream?: boolean;
 } & {
     data?: D; 
     params?: any; 
